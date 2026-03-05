@@ -21,8 +21,8 @@ def main():
     strategy = NoAggStrategy(
         initial_parameters=init_params,
         fraction_fit=1.0,
-        min_fit_clients=1,          # ✅ debug: later set to 15
-        min_available_clients=1,    # ✅ debug: later set to 15
+        min_fit_clients=15,          # ✅ debug: later set to 15
+        min_available_clients=15,    # ✅ debug: later set to 15
 
         # ✅ IMPORTANT: disable evaluation to avoid ZeroDivisionError
         fraction_evaluate=0.0,
