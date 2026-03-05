@@ -7,7 +7,7 @@ import numpy as np
 @dataclass(frozen=True)
 class DirichletSplitConfig:
     num_clients: int = 15
-    alpha: float = 0.3
+    alpha: float = 0.1  # smaller = stronger non-IID (fewer classes per client); 0.1 for class-presence attacks
     seed: int = 42
     num_classes: int = 10
     min_size_per_client: int = 500  # ~3k hedef için güvenli; gerekirse düşür

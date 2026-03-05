@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import flwr as fl
 
 from src.models.resnet_cifar import ResNet18Cifar
@@ -11,8 +12,24 @@ def get_initial_parameters() -> fl.common.Parameters:
     return fl.common.ndarrays_to_parameters(ndarrays)
 
 
+# Run config (set here for each experiment)
+# Alpha=0.1: stronger non-IID → fewer classes per client (better for class-presence inference).
+# Clients must be launched with matching split, e.g.:
+#   --split_path outputs/splits/cifar10_dirichlet_a0.1_seed42.npy
+ALPHA = 0.1
+SEED = 42
+
+PROTO_OUT_DIR = f"outputs/client_protos_a{ALPHA}_s{SEED}"
+METRICS_OUT_DIR = "outputs/metrics"
+
+
 def fit_config(server_round: int):
-    return {"proto_out_dir": "outputs/client_protos"}
+    return {
+        "proto_out_dir": PROTO_OUT_DIR,
+        "metrics_out_dir": METRICS_OUT_DIR,
+        "alpha": ALPHA,
+        "seed": SEED,
+    }
 
 
 def main():
@@ -21,13 +38,10 @@ def main():
     strategy = NoAggStrategy(
         initial_parameters=init_params,
         fraction_fit=1.0,
-        min_fit_clients=15,          # ✅ debug: later set to 15
-        min_available_clients=15,    # ✅ debug: later set to 15
-
-        # ✅ IMPORTANT: disable evaluation to avoid ZeroDivisionError
+        min_fit_clients=15,
+        min_available_clients=15,
         fraction_evaluate=0.0,
         min_evaluate_clients=0,
-
         on_fit_config_fn=fit_config,
     )
 
@@ -37,7 +51,9 @@ def main():
         strategy=strategy,
     )
 
-    print("✅ Round finished. Prototypes should be in outputs/client_protos/")
+    print("✅ Round finished.")
+    print(f"✅ Prototypes: {PROTO_OUT_DIR}")
+    print(f"✅ Metrics CSV: {METRICS_OUT_DIR}/client_accuracy.csv")
 
 
 if __name__ == "__main__":

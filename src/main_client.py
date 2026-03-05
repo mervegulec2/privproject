@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import argparse
 import flwr as fl
 
@@ -23,11 +24,11 @@ def main():
     split = load_split(args.split_path)
     train_idx = split[args.cid]
 
-    # ✅ tuned config (better accuracy baseline under non-IID)
+    # ✅ Epoch=1 (fast run)
     cfg = TrainConfig(
-        epochs=5,          # was 5
+        epochs=1,
         batch_size=64,
-        lr=0.01,            # was 0.1
+        lr=0.01,
         momentum=0.9,
         weight_decay=5e-4,
         device=args.device,
