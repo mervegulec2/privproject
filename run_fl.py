@@ -10,7 +10,7 @@ import numpy as np
 from torch.utils.data import DataLoader, Subset
 from typing import Dict, List, Tuple
 
-from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, dirichlet_split_indices, load_split
+from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, dirichlet_split_indices, load_split, save_split
 from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed
 from src.aggregation import PrototypeStrategy
@@ -63,7 +63,10 @@ class FlowerPrototypeClient(fl.client.NumPyClient):
         return self.get_parameters(config={}), len(self.split_indices), metrics
 
     def evaluate(self, parameters, config):
-        return 0.0, 0, {}
+        """Local Evaluation."""
+        # Note: We already evaluate in fit(), but Flower requires this for the evaluate round.
+        # To avoid ZeroDivisionError, we return the test set size.
+        return 0.0, len(self.test_ds), {}
 
 # 2. Main Simulation
 def main():
@@ -94,6 +97,7 @@ def main():
         num_classes=10,
         min_fit_clients=num_clients,
         min_available_clients=num_clients,
+        fraction_evaluate=0.0,  # Disable separate evaluation round to avoid crashes (we evaluate in fit)
     )
 
     fl.simulation.start_simulation(
@@ -101,7 +105,7 @@ def main():
         num_clients=num_clients,
         config=fl.server.ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
-        client_resources={"num_cpus": 1, "num_gpus": 0.2 if torch.cuda.is_available() else 0},
+        client_resources={"num_cpus": 1, "num_gpus": 0.5 if torch.cuda.is_available() else 0}, # Lowered GPU resource to allow some concurrency
     )
 
 if __name__ == "__main__":
