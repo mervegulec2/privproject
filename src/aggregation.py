@@ -53,6 +53,7 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
     ) -> List[Tuple[ClientProxy, FitIns]]:
         """Send the current global prototypes to clients via the config."""
         config = self._pack_prototypes(self.global_prototypes)
+        config["server_round"] = server_round
         fit_ins = FitIns(parameters, config)
         clients = client_manager.sample(num_clients=self.min_fit_clients, min_num_clients=self.min_available_clients)
         return [(client, fit_ins) for client in clients]
