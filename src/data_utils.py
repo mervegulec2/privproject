@@ -87,3 +87,30 @@ def save_split(client_map: Dict[int, np.ndarray], path: str) -> None:
 def load_split(path: str) -> Dict[int, np.ndarray]:
     arr = np.load(path, allow_pickle=True)
     return {cid: arr[cid] for cid in range(len(arr))}
+
+CIFAR10_CLASSES = ["airplane", "automobile", "bird", "cat", "deer",
+                   "dog", "frog", "horse", "ship", "truck"]
+
+def print_client_distributions(client_map: Dict[int, np.ndarray], dataset) -> None:
+    """Print class counts and percentages for each client."""
+    y = _targets(dataset)
+    num_classes = len(CIFAR10_CLASSES)
+
+    # Header
+    print("\n" + "=" * 120)
+    print("CLIENT DATA DISTRIBUTIONS")
+    print("=" * 120)
+    header = f"{'Client':<10} {'Samples':>7}    " + "    ".join(f"{c:>12}" for c in CIFAR10_CLASSES)
+    print(header)
+    print("-" * 120)
+
+    for cid in sorted(client_map.keys()):
+        indices = client_map[cid]
+        labels = y[indices]
+        total = len(labels)
+        counts = [(labels == c).sum() for c in range(num_classes)]
+        cells = [f"{cnt:>4} ({100*cnt/total:4.1f}%)" for cnt in counts]
+        row = f"{'Client '+str(cid):<10} {total:>7}    " + "    ".join(f"{cell:>12}" for cell in cells)
+        print(row)
+
+    print("=" * 120 + "\n")
