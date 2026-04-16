@@ -14,6 +14,7 @@ from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, di
 from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed
 from src.aggregation import PrototypeStrategy
+import pickle
 
 # 1. Define the Flower Client
 class FlowerPrototypeClient(fl.client.NumPyClient):
@@ -24,9 +25,14 @@ class FlowerPrototypeClient(fl.client.NumPyClient):
         self.split_indices = split[cid]
         self.cfg = cfg
         
-        # Persistent local model (State persists across rounds)
-        self.model = ResNet18Cifar(num_classes=10).to(cfg.device)
         self.device = cfg.device
+        self.model = ResNet18Cifar(num_classes=10).to(self.device)
+        
+        # Load local model state if it exists (Persistence across rounds)
+        self.model_path = f"outputs/models/client_{cid}.pth"
+        os.makedirs("outputs/models", exist_ok=True)
+        if os.path.exists(self.model_path):
+            self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
 
     def get_parameters(self, config):
         return [] # No weight sharing
@@ -36,12 +42,10 @@ class FlowerPrototypeClient(fl.client.NumPyClient):
         server_round = config.get("server_round", "?")
         print(f"  --> [Round {server_round}] Client {self.cid} starting training...")
         
-        # 1. Unpack global prototypes
+        # 1. Unpack global prototypes from bytes
         global_protos = {}
-        for key, val in config.items():
-            if key.startswith("proto_"):
-                class_id = int(key.split("_")[1])
-                global_protos[class_id] = np.array(val, dtype=np.float32)
+        if "protos_bytes" in config:
+            global_protos = pickle.loads(config["protos_bytes"])
 
         # 2. Local Training (Alignment Loss lambda=0.05)
         train_loader = DataLoader(Subset(self.train_ds, self.split_indices), batch_size=self.cfg.batch_size, shuffle=True)
@@ -55,10 +59,14 @@ class FlowerPrototypeClient(fl.client.NumPyClient):
         acc = evaluate_accuracy(self.model, test_loader, self.device)
         print(f"      Client {self.cid} Accuracy: {acc:.4f}")
 
-        # 5. Send only prototypes and accuracy
-        metrics = {"accuracy": acc}
-        for c, vec in local_protos.items():
-            metrics[f"proto_{c}"] = vec.tolist()
+        # 5. Save local model state
+        torch.save(self.model.state_dict(), self.model_path)
+
+        # 6. Send results (Prototypes serialized as bytes in metrics)
+        metrics = {
+            "accuracy": acc,
+            "protos_bytes": pickle.dumps(local_protos)
+        }
 
         return self.get_parameters(config={}), len(self.split_indices), metrics
 
@@ -71,7 +79,7 @@ class FlowerPrototypeClient(fl.client.NumPyClient):
 # 2. Main Simulation
 def main():
     num_clients = 10
-    num_rounds = 20
+    num_rounds = 2
     alpha = 0.1
     seed = 42
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -88,7 +96,7 @@ def main():
     else:
         split = load_split(split_path)
 
-    cfg_train = TrainConfig(epochs=2, device=device)
+    cfg_train = TrainConfig(epochs=1, device=device)
 
     def client_fn(cid: str) -> FlowerPrototypeClient:
         return FlowerPrototypeClient(int(cid), train_ds, test_ds, split, cfg_train)

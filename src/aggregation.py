@@ -1,6 +1,7 @@
 import numpy as np
 import flwr as fl
 from typing import List, Dict, Optional, Tuple, Union
+import pickle
 from flwr.common import Metrics, Scalar, Parameters, FitRes, FitIns, NDArrays, ndarrays_to_parameters, parameters_to_ndarrays
 from flwr.server.client_proxy import ClientProxy
 
@@ -67,18 +68,14 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         return global_protos
 
     def _pack_prototypes(self, protos: Dict[int, np.ndarray]) -> Dict[str, Scalar]:
-        """Convert prototypes dict to a flat dictionary for Flower transmission."""
-        packed = {}
-        for c, vec in protos.items():
-            # Flatten and convert to list for transport
-            packed[f"proto_{c}"] = vec.tolist()
-        return packed
+        """Convert prototypes dict to bytes for Flower transmission."""
+        if not protos:
+            return {}
+        # We use pickle to serialize the entire dictionary into a bytes object
+        return {"protos_bytes": pickle.dumps(protos)}
 
     def _unpack_prototypes(self, metrics: Dict[str, Scalar]) -> Dict[int, np.ndarray]:
-        """Reconstruct prototypes dict from Flower metrics."""
-        unpacked = {}
-        for key, val in metrics.items():
-            if key.startswith("proto_"):
-                class_id = int(key.split("_")[1])
-                unpacked[class_id] = np.array(val, dtype=np.float32)
-        return unpacked
+        """Reconstruct prototypes dict from Flower bytes."""
+        if "protos_bytes" in metrics:
+            return pickle.loads(metrics["protos_bytes"])
+        return {}
