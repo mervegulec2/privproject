@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import numpy as np
 from dataclasses import dataclass
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 @dataclass(frozen=True)
 class TrainConfig:
@@ -12,23 +13,62 @@ class TrainConfig:
     momentum: float = 0.9
     weight_decay: float = 5e-4
     device: str = "cpu"
+    train_backbone: bool = True
+    train_head: bool = True
 
 
-def train_local_proto(model, train_loader: DataLoader, global_protos: dict, cfg: TrainConfig, lambda_p: float = 0.05):
+def train_local_proto(
+    model,
+    train_loader: DataLoader,
+    global_protos: dict,
+    cfg: TrainConfig,
+    lambda_p: float = 0.05,
+    progress: bool = False,
+):
     """Collaborative training with Prototype Alignment Loss."""
     model.to(cfg.device)
     model.train()
-    opt = torch.optim.SGD(model.parameters(), lr=cfg.lr, momentum=cfg.momentum, weight_decay=cfg.weight_decay)
+
+    # Personalization knobs: allow training only parts of the model (e.g., head-only).
+    if hasattr(model, "backbone"):
+        for p in model.backbone.parameters():
+            p.requires_grad = bool(cfg.train_backbone)
+    if hasattr(model, "fc"):
+        for p in model.fc.parameters():
+            p.requires_grad = bool(cfg.train_head)
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if len(trainable_params) == 0:
+        return 0.0
+
+    opt = torch.optim.SGD(trainable_params, lr=cfg.lr, momentum=cfg.momentum, weight_decay=cfg.weight_decay)
     
     use_amp = (cfg.device == "cuda")
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     # Convert global prototypes to torch tensors on correct device
-    g_protos_torch = {c: torch.tensor(v).to(cfg.device) for c, v in global_protos.items()}
+    g_protos_torch = {int(c): torch.tensor(v, dtype=torch.float32, device=cfg.device) for c, v in global_protos.items()}
+    # Build a fast lookup table for batch-wise prototype alignment:
+    # proto_table[y] gives the prototype for class y (if available).
+    proto_table = None
+    proto_avail = None
+    if len(g_protos_torch) > 0:
+        d = next(iter(g_protos_torch.values())).numel()
+        k = max(g_protos_torch.keys()) + 1
+        proto_table = torch.zeros((k, d), dtype=torch.float32, device=cfg.device)
+        proto_avail = torch.zeros((k,), dtype=torch.bool, device=cfg.device)
+        for c, v in g_protos_torch.items():
+            if v.numel() != d:
+                raise ValueError("Inconsistent prototype dimensionality across classes.")
+            proto_table[c] = v.view(-1)
+            proto_avail[c] = True
 
     for ep in range(cfg.epochs):
         total_loss, total = 0.0, 0
-        for x, y in train_loader:
+        it = train_loader
+        if progress:
+            it = tqdm(train_loader, desc=f"epoch {ep+1}/{cfg.epochs}", leave=False)
+        for x, y in it:
             x, y = x.to(cfg.device), y.to(cfg.device)
             opt.zero_grad()
             
@@ -36,19 +76,18 @@ def train_local_proto(model, train_loader: DataLoader, global_protos: dict, cfg:
                 logits, emb = model(x)
                 ce_loss = F.cross_entropy(logits, y)
                 
-                # Prototype Alignment Loss
-                proto_loss = 0.0
-                matched_samples = 0
-                for c in g_protos_torch.keys():
-                    mask = (y == c)
-                    if mask.any():
-                        sample_embs = emb[mask]
-                        # Squared L2 distance
-                        proto_loss += torch.sum((sample_embs - g_protos_torch[c])**2)
-                        matched_samples += sample_embs.size(0)
-                
-                if matched_samples > 0:
-                    proto_loss = proto_loss / matched_samples
+                # Prototype Alignment Loss (FedProto-style):
+                # For each sample, align to the global prototype of its own label only.
+                proto_loss = torch.tensor(0.0, device=cfg.device)
+                if proto_table is not None:
+                    in_range = y < proto_table.size(0)
+                    if in_range.any():
+                        y_in = y[in_range]
+                        avail = proto_avail[y_in]
+                        if avail.any():
+                            emb_sel = emb[in_range][avail]
+                            proto_sel = proto_table[y_in][avail]
+                            proto_loss = torch.mean(torch.sum((emb_sel - proto_sel) ** 2, dim=1))
                 
                 loss = ce_loss + lambda_p * proto_loss
             

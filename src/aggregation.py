@@ -27,7 +27,8 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         2. Aggregate prototypes from metrics.
         """
         if not results:
-            return None, {}
+            # Return empty parameters to keep Flower protocol happy
+            return ndarrays_to_parameters([]), {}
 
         # 1. Collect prototypes from all clients
         client_protos_list = []
@@ -45,13 +46,16 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         
         print(f"\n[Round {server_round}] Server Aggregated {len(results)} clients. Avg Acc: {avg_acc:.4f}")
 
-        # We return None for parameters because we don't aggregate weights
-        return None, {"avg_accuracy": avg_acc}
+        # Return empty parameters because we don't aggregate weights
+        return ndarrays_to_parameters([]), {"avg_accuracy": avg_acc}
 
     def configure_fit(
         self, server_round: int, parameters: Parameters, client_manager: fl.server.client_manager.ClientManager
     ) -> List[Tuple[ClientProxy, FitIns]]:
         """Send the current global prototypes to clients via the config."""
+        # In prototype-only FL, we may have empty parameters.
+        if parameters is None:
+            parameters = ndarrays_to_parameters([])
         config = self._pack_prototypes(self.global_prototypes)
         fit_ins = FitIns(parameters, config)
         clients = client_manager.sample(num_clients=self.min_fit_clients, min_num_clients=self.min_available_clients)
