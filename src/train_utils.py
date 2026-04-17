@@ -44,7 +44,7 @@ def train_local_proto(
     opt = torch.optim.SGD(trainable_params, lr=cfg.lr, momentum=cfg.momentum, weight_decay=cfg.weight_decay)
     
     use_amp = (cfg.device == "cuda")
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
 
     # Convert global prototypes to torch tensors on correct device
     g_protos_torch = {int(c): torch.tensor(v, dtype=torch.float32, device=cfg.device) for c, v in global_protos.items()}
@@ -72,7 +72,7 @@ def train_local_proto(
             x, y = x.to(cfg.device), y.to(cfg.device)
             opt.zero_grad()
             
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast('cuda', enabled=use_amp):
                 logits, emb = model(x)
                 ce_loss = F.cross_entropy(logits, y)
                 

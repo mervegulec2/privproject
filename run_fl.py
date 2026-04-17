@@ -2,6 +2,7 @@ import os
 import time
 import multiprocessing as mp
 import torch
+import csv
 import numpy as np
 from torch.utils.data import DataLoader, Subset
 from typing import Dict
@@ -24,9 +25,11 @@ def _select_device() -> str:
     requested = os.environ.get("DEVICE", "")
     if requested:
         return requested
-    # For local (single-process) mode, CUDA can be used if available.
-    # For Flower multi-process mode, defaulting to CPU avoids GPU thrashing.
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 # 1. Define the local client (no Ray/Flower dependency required)
 class LocalPrototypeClient:
@@ -271,7 +274,21 @@ def main():
 
         global_prototypes = aggregate_prototypes(round_proto_dicts, num_classes=10)
         avg_acc = float(np.mean(round_accs)) if round_accs else 0.0
-        print(f"[Round {r}] Aggregated {num_clients} clients. Avg Acc: {avg_acc:.4f}", flush=True)
+        
+        # 1. Detailed Terminal Output (goes to simulation_log.txt via tee)
+        acc_list_str = ", ".join([f"C{i}:{a:.4f}" for i, a in enumerate(round_accs)])
+        print(f"[Round {r}] Avg Acc: {avg_acc:.4f} | Clients: {acc_list_str}", flush=True)
+
+        # 2. Save to CSV Output File
+        log_dir = "outputs/metrics"
+        os.makedirs(log_dir, exist_ok=True)
+        csv_path = os.path.join(log_dir, "simulation_results.csv")
+        file_exists = os.path.isfile(csv_path)
+        with open(csv_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["round", "avg_accuracy"] + [f"client_{i}" for i in range(num_clients)])
+            writer.writerow([r, avg_acc] + round_accs)
 
 if __name__ == "__main__":
     main()

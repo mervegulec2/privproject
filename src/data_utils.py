@@ -27,8 +27,8 @@ def get_cifar10_transforms():
 
 def load_cifar10(cfg: Cifar10Config):
     train_tf, test_tf = get_cifar10_transforms()
-    train_ds = datasets.CIFAR10(root=cfg.root, train=True, download=False, transform=train_tf)
-    test_ds  = datasets.CIFAR10(root=cfg.root, train=False, download=False, transform=test_tf)
+    train_ds = datasets.CIFAR10(root=cfg.root, train=True, download=True, transform=train_tf)
+    test_ds  = datasets.CIFAR10(root=cfg.root, train=False, download=True, transform=test_tf)
     return train_ds, test_ds
 
 @dataclass(frozen=True)
