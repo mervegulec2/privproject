@@ -67,3 +67,36 @@ def create_local_aware_balanced_indices(
             selected_indices.extend(selected)
     
     return np.array(selected_indices)
+
+def create_local_proportional_indices(
+    test_dataset: Dataset, 
+    train_dataset: Dataset,
+    client_train_indices: np.ndarray,
+    total_test_samples: int = 1000,
+    seed: int = 42
+) -> np.ndarray:
+    """Creates a test set where class proportions match the client's training data."""
+    rng = np.random.default_rng(seed)
+    
+    if hasattr(train_dataset, "targets"):
+        train_targets = np.array(train_dataset.targets)
+    else:
+        train_targets = np.array([train_dataset[i][1] for i in range(len(train_dataset))])
+        
+    client_labels = train_targets[client_train_indices]
+    classes, counts = np.unique(client_labels, return_counts=True)
+    proportions = counts / len(client_labels)
+    
+    test_class_indices = get_indices_by_class(test_dataset)
+    
+    selected_indices = []
+    for c, prop in zip(classes, proportions):
+        if c in test_class_indices:
+            idxs = test_class_indices[c]
+            n = int(np.round(prop * total_test_samples))
+            n = min(len(idxs), n)
+            if n > 0:
+                selected = rng.choice(idxs, size=n, replace=False)
+                selected_indices.extend(selected)
+    
+    return np.array(selected_indices)
