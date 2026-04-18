@@ -87,3 +87,9 @@ def save_split(client_map: Dict[int, np.ndarray], path: str) -> None:
 def load_split(path: str) -> Dict[int, np.ndarray]:
     arr = np.load(path, allow_pickle=True)
     return {cid: arr[cid] for cid in range(len(arr))}
+
+def get_seen_classes(dataset, indices: np.ndarray) -> set[int]:
+    """Returns the set of unique class labels present in a subset of the dataset."""
+    y = _targets(dataset)
+    subset_y = y[indices]
+    return set(np.unique(subset_y).tolist())

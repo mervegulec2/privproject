@@ -8,10 +8,15 @@ from torch.utils.data import DataLoader, Subset
 from typing import Dict
 from tqdm import tqdm
 
-from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, dirichlet_split_indices, load_split, save_split
+from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, dirichlet_split_indices, load_split, save_split, get_seen_classes
 from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed
 from src.aggregation import PrototypeStrategy
+from src.eval.test_sets import (
+    create_balanced_test_indices, 
+    create_local_aware_indices, 
+    create_local_aware_balanced_indices
+)
 
 # Flower is optional in this file: USE_FLOWER=1 enables gRPC server+client mode (no Ray).
 try:
@@ -33,10 +38,10 @@ def _select_device() -> str:
 
 # 1. Define the local client (no Ray/Flower dependency required)
 class LocalPrototypeClient:
-    def __init__(self, cid: int, train_ds, test_ds, split, cfg: TrainConfig):
+    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split, cfg: TrainConfig):
         self.cid = cid
         self.train_ds = train_ds
-        self.test_ds = test_ds
+        self.test_sets = test_sets
         self.split_indices = split[cid]
         max_samples = int(os.environ.get("MAX_SAMPLES_PER_CLIENT", "0"))
         if max_samples > 0 and len(self.split_indices) > max_samples:
@@ -56,31 +61,30 @@ class LocalPrototypeClient:
             shuffle=True
         )
         progress = os.environ.get("PROGRESS", "1") != "0"
-        # FedProto uses a prototype-loss weight "ld". Their CIFAR-10 example uses ld=0.1.
         lambda_p = float(os.environ.get("LD", os.environ.get("LAMBDA_P", "0.1")))
         train_local_proto(self.model, train_loader, global_protos, self.cfg, lambda_p=lambda_p, progress=progress)
 
-        # Compute local prototypes to send to server
         local_protos = compute_prototypes(self.model, train_loader, self.device)
         
-        # Evaluate on the shared test set (utility)
-        max_test = int(os.environ.get("MAX_TEST_SAMPLES", "0"))
-        test_ds = self.test_ds
-        if max_test > 0 and len(test_ds) > max_test:
-            test_ds = Subset(test_ds, list(range(max_test)))
-        test_loader = DataLoader(test_ds, batch_size=256, shuffle=False)
-        acc = evaluate_accuracy(self.model, test_loader, self.device)
+        # Evaluate on all provided test sets
+        accuracies = {}
+        for name, subset in self.test_sets.items():
+            if len(subset) == 0:
+                accuracies[name] = 0.0
+                continue
+            test_loader = DataLoader(subset, batch_size=256, shuffle=False)
+            accuracies[name] = float(evaluate_accuracy(self.model, test_loader, self.device))
 
-        return {"n": len(self.split_indices), "accuracy": float(acc), "protos": local_protos}
+        return {"n": len(self.split_indices), "accuracies": accuracies, "protos": local_protos}
 
 
 class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object):  # type: ignore[misc]
     """Prototype-only Flower client: shares prototypes, keeps all weights local."""
 
-    def __init__(self, cid: int, train_ds, test_ds, split_indices: np.ndarray, cfg: TrainConfig):
+    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split_indices: np.ndarray, cfg: TrainConfig):
         self.cid = cid
         self.train_ds = train_ds
-        self.test_ds = test_ds
+        self.test_sets = test_sets
         self.split_indices = split_indices
         max_samples = int(os.environ.get("MAX_SAMPLES_PER_CLIENT", "0"))
         if max_samples > 0 and len(self.split_indices) > max_samples:
@@ -113,15 +117,18 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
 
         local_protos = compute_prototypes(self.model, train_loader, self.device)
 
-        # Evaluate (utility).
-        max_test = int(os.environ.get("MAX_TEST_SAMPLES", "0"))
-        test_ds = self.test_ds
-        if max_test > 0 and len(test_ds) > max_test:
-            test_ds = Subset(test_ds, list(range(max_test)))
-        test_loader = DataLoader(test_ds, batch_size=256, shuffle=False)
-        acc = float(evaluate_accuracy(self.model, test_loader, self.device))
+        # Evaluate on all provided test sets
+        accuracies = {}
+        for name, subset in self.test_sets.items():
+            if len(subset) == 0:
+                accuracies[name] = 0.0
+                continue
+            test_loader = DataLoader(subset, batch_size=256, shuffle=False)
+            accuracies[name] = float(evaluate_accuracy(self.model, test_loader, self.device))
 
-        metrics: Dict[str, object] = {"accuracy": acc}
+        # Metrics for server: update to return multiple accuracies
+        metrics: Dict[str, object] = {f"acc_{name}": acc for name, acc in accuracies.items()}
+        metrics["accuracy"] = accuracies["local"] # Standard fallback
         for c, vec in local_protos.items():
             metrics[f"proto_{c}"] = vec.tolist()
 
@@ -149,7 +156,23 @@ def _flower_client_proc(server_address: str, cid: int, split_path: str, cfg_dict
     cfg = TrainConfig(**cfg_dict)
     train_ds, test_ds = load_cifar10(Cifar10Config(root="data"))
     split = load_split(split_path)
-    client = FlowerPrototypeClient(cid, train_ds, test_ds, split[cid], cfg)
+    seed = int(os.environ.get("SEED", "42"))
+
+    # Prepare Test Sets (Same logic as main)
+    gb_indices = create_balanced_test_indices(test_ds, samples_per_class=100, seed=seed)
+    test_global_balanced = Subset(test_ds, gb_indices)
+    seen_classes = get_seen_classes(train_ds, split[cid])
+    la_indices = create_local_aware_indices(test_ds, seen_classes)
+    lab_indices = create_local_aware_balanced_indices(test_ds, seen_classes, samples_per_class=100, seed=seed)
+
+    test_sets = {
+        "global": test_ds,
+        "global_balanced": test_global_balanced,
+        "local": Subset(test_ds, la_indices),
+        "local_balanced": Subset(test_ds, lab_indices),
+    }
+
+    client = FlowerPrototypeClient(cid, train_ds, test_sets, split[cid], cfg)
     fl.client.start_numpy_client(server_address=server_address, client=client)
 
 
@@ -245,8 +268,25 @@ def main():
             server.join(timeout=5)
         return
 
-    # Local loop mode: Build persistent clients (clients keep their own heads/models)
-    clients = [LocalPrototypeClient(cid, train_ds, test_ds, split, cfg_train) for cid in range(num_clients)]
+    # Prepare Evaluation Test Sets
+    gb_indices = create_balanced_test_indices(test_ds, samples_per_class=100, seed=seed)
+    test_global_balanced = Subset(test_ds, gb_indices)
+    
+    clients = []
+    for cid in range(num_clients):
+        seen_classes = get_seen_classes(train_ds, split[cid])
+        
+        # Local Aware subsets
+        la_indices = create_local_aware_indices(test_ds, seen_classes)
+        lab_indices = create_local_aware_balanced_indices(test_ds, seen_classes, samples_per_class=100, seed=seed)
+        
+        client_test_sets = {
+            "global": test_ds,
+            "global_balanced": test_global_balanced,
+            "local": Subset(test_ds, la_indices),
+            "local_balanced": Subset(test_ds, lab_indices),
+        }
+        clients.append(LocalPrototypeClient(cid, train_ds, client_test_sets, split, cfg_train))
 
     # Local prototype-FL loop (no Ray needed)
     global_prototypes: Dict[int, np.ndarray] = {}
@@ -261,23 +301,31 @@ def main():
 
     for r in round_iter:
         round_proto_dicts = []
-        round_accs = []
+        round_metrics = {
+            "global": [],
+            "global_balanced": [],
+            "local": [],
+            "local_balanced": []
+        }
+        
         client_iter = clients
         if progress:
             client_iter = tqdm(clients, desc=f"Round {r}/{num_rounds} clients", leave=False)
         for client in client_iter:
             out = client.fit(global_prototypes)
             round_proto_dicts.append(out["protos"])
-            round_accs.append(out["accuracy"])
+            for name, acc in out["accuracies"].items():
+                round_metrics[name].append(acc)
+            
             if progress and hasattr(client_iter, "set_postfix_str"):
-                client_iter.set_postfix_str(f"last_acc={out['accuracy']:.3f}")
+                client_iter.set_postfix_str(f"local_acc={out['accuracies']['local']:.3f}")
 
         global_prototypes = aggregate_prototypes(round_proto_dicts, num_classes=10)
-        avg_acc = float(np.mean(round_accs)) if round_accs else 0.0
         
-        # 1. Detailed Terminal Output (goes to simulation_log.txt via tee)
-        acc_list_str = ", ".join([f"C{i}:{a:.4f}" for i, a in enumerate(round_accs)])
-        print(f"[Round {r}] Avg Acc: {avg_acc:.4f} | Clients: {acc_list_str}", flush=True)
+        avgs = {name: float(np.mean(accs)) if accs else 0.0 for name, accs in round_metrics.items()}
+        
+        # 1. Detailed Terminal Output
+        print(f"[Round {r}] Avg Accs -> Global: {avgs['global']:.4f} | Local: {avgs['local']:.4f} | Local-Bal: {avgs['local_balanced']:.4f}", flush=True)
 
         # 2. Save to CSV Output File
         log_dir = "outputs/metrics"
@@ -287,8 +335,9 @@ def main():
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             if not file_exists:
-                writer.writerow(["round", "avg_accuracy"] + [f"client_{i}" for i in range(num_clients)])
-            writer.writerow([r, avg_acc] + round_accs)
+                headers = ["round", "avg_global", "avg_global_balanced", "avg_local", "avg_local_balanced"]
+                writer.writerow(headers)
+            writer.writerow([r, avgs["global"], avgs["global_balanced"], avgs["local"], avgs["local_balanced"]])
 
 if __name__ == "__main__":
     main()
