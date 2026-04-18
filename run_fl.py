@@ -251,7 +251,7 @@ def main():
                 "local": test_local,
                 "local_balanced": test_local_balanced
             }
-            return FlowerPrototypeClient(cid_int, train_ds, test_sets, split, cfg_train, device).to_client()
+            return FlowerPrototypeClient(cid_int, train_ds, test_sets, split[cid_int], cfg_train).to_client()
             
         strategy = PrototypeStrategy(
             fraction_fit=1.0,
