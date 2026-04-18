@@ -76,18 +76,23 @@ def train_local_proto(
                 logits, emb = model(x)
                 ce_loss = F.cross_entropy(logits, y)
                 
-                # Prototype Alignment Loss (FedProto-style):
-                # For each sample, align to the global prototype of its own label only.
+                # Prototype Alignment Loss (FedProto Algorithm 1):
+                # Compute local batch prototype per class, then distance to global prototype.
                 proto_loss = torch.tensor(0.0, device=cfg.device)
                 if proto_table is not None:
-                    in_range = y < proto_table.size(0)
-                    if in_range.any():
-                        y_in = y[in_range]
-                        avail = proto_avail[y_in]
-                        if avail.any():
-                            emb_sel = emb[in_range][avail]
-                            proto_sel = proto_table[y_in][avail]
-                            proto_loss = torch.mean(torch.sum((emb_sel - proto_sel) ** 2, dim=1))
+                    unique_classes = torch.unique(y)
+                    valid_dists = []
+                    for c in unique_classes:
+                        c_idx = int(c.item())
+                        if c_idx < proto_table.size(0) and proto_avail[c_idx]:
+                            # Eq 3: Local batch prototype for class c
+                            batch_proto_c = emb[y == c].mean(dim=0)
+                            # Eq 8: Distance to global prototype
+                            dist = torch.sum((batch_proto_c - proto_table[c_idx]) ** 2)
+                            valid_dists.append(dist)
+                    
+                    if valid_dists:
+                        proto_loss = torch.stack(valid_dists).sum()
                 
                 loss = ce_loss + lambda_p * proto_loss
             
@@ -123,10 +128,12 @@ def compute_prototypes(model, loader: DataLoader, device: str, num_classes: int 
             counts[c] += 1
 
     prototypes = {}
+    class_counts = {}
     for c in range(num_classes):
         if counts[c] > 0:
             prototypes[c] = (sums[c] / counts[c]).astype(np.float32)
-    return prototypes
+            class_counts[c] = counts[c]
+    return prototypes, class_counts
 
 def evaluate_accuracy(model, test_loader: DataLoader, device: str) -> float:
     model.to(device)

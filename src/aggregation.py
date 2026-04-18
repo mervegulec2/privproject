@@ -3,6 +3,7 @@ import flwr as fl
 from typing import List, Dict, Optional, Tuple, Union
 from flwr.common import Metrics, Scalar, Parameters, FitRes, FitIns, NDArrays, ndarrays_to_parameters, parameters_to_ndarrays
 from flwr.server.client_proxy import ClientProxy
+import pickle
 
 class PrototypeStrategy(fl.server.strategy.FedAvg):
     """
@@ -30,15 +31,17 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
             # Return empty parameters to keep Flower protocol happy
             return ndarrays_to_parameters([]), {}
 
-        # 1. Collect prototypes from all clients
+        # 1. Collect prototypes and counts from all clients
         client_protos_list = []
+        client_counts_list = []
         for _, fit_res in results:
-            # We will send prototypes as flattened lists in metrics
-            protos = self._unpack_prototypes(fit_res.metrics)
+            # We will send prototypes and counts as serialized bytes in metrics
+            protos, counts = self._unpack_prototypes(fit_res.metrics)
             client_protos_list.append(protos)
+            client_counts_list.append(counts)
 
-        # 2. Aggregate prototypes
-        self.global_prototypes = self._aggregate_protos(client_protos_list)
+        # 2. Aggregate prototypes using weighted average (Eq 6)
+        self.global_prototypes = self._aggregate_protos(client_protos_list, client_counts_list)
         
         # 3. Report average accuracy across clients
         accuracies = [fit_res.metrics["accuracy"] for _, fit_res in results if "accuracy" in fit_res.metrics]
@@ -61,27 +64,31 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         clients = client_manager.sample(num_clients=self.min_fit_clients, min_num_clients=self.min_available_clients)
         return [(client, fit_ins) for client in clients]
 
-    def _aggregate_protos(self, client_protos_list: List[Dict[int, np.ndarray]]) -> Dict[int, np.ndarray]:
+    def _aggregate_protos(self, client_protos_list: List[Dict[int, np.ndarray]], client_counts_list: List[Dict[int, int]]) -> Dict[int, np.ndarray]:
+        """Weighted average of class prototypes (Eq 6)."""
         global_protos = {}
         for c in range(self.num_classes):
-            class_protos = [p[c] for p in client_protos_list if c in p]
-            if class_protos:
-                global_protos[c] = np.mean(class_protos, axis=0)
+            c_protos = []
+            c_counts = []
+            for protos, counts in zip(client_protos_list, client_counts_list):
+                if c in protos and c in counts:
+                    c_protos.append(protos[c])
+                    c_counts.append(counts[c])
+            
+            if c_protos:
+                total_count = sum(c_counts)
+                weighted_sum = sum(p * cnt for p, cnt in zip(c_protos, c_counts))
+                global_protos[c] = (weighted_sum / total_count).astype(np.float32)
         return global_protos
 
     def _pack_prototypes(self, protos: Dict[int, np.ndarray]) -> Dict[str, Scalar]:
-        """Convert prototypes dict to a flat dictionary for Flower transmission."""
-        packed = {}
-        for c, vec in protos.items():
-            # Flatten and convert to list for transport
-            packed[f"proto_{c}"] = vec.tolist()
-        return packed
+        """Convert prototypes dict to bytes for Flower transmission."""
+        if not protos:
+            return {}
+        return {"protos_bytes": pickle.dumps(protos)}
 
-    def _unpack_prototypes(self, metrics: Dict[str, Scalar]) -> Dict[int, np.ndarray]:
-        """Reconstruct prototypes dict from Flower metrics."""
-        unpacked = {}
-        for key, val in metrics.items():
-            if key.startswith("proto_"):
-                class_id = int(key.split("_")[1])
-                unpacked[class_id] = np.array(val, dtype=np.float32)
-        return unpacked
+    def _unpack_prototypes(self, metrics: Dict[str, Scalar]) -> Tuple[Dict[int, np.ndarray], Dict[int, int]]:
+        """Reconstruct prototypes and counts from Flower bytes."""
+        protos = pickle.loads(metrics["protos_bytes"]) if "protos_bytes" in metrics else {}
+        counts = pickle.loads(metrics["counts_bytes"]) if "counts_bytes" in metrics else {}
+        return protos, counts

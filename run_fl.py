@@ -4,6 +4,7 @@ import multiprocessing as mp
 import torch
 import csv
 import numpy as np
+import pickle
 from torch.utils.data import DataLoader, Subset
 from typing import Dict
 from tqdm import tqdm
@@ -64,7 +65,7 @@ class LocalPrototypeClient:
         lambda_p = float(os.environ.get("LD", os.environ.get("LAMBDA_P", "0.1")))
         train_local_proto(self.model, train_loader, global_protos, self.cfg, lambda_p=lambda_p, progress=progress)
 
-        local_protos = compute_prototypes(self.model, train_loader, self.device)
+        local_protos, local_counts = compute_prototypes(self.model, train_loader, self.device)
         
         # Evaluate on all provided test sets
         accuracies = {}
@@ -75,7 +76,7 @@ class LocalPrototypeClient:
             test_loader = DataLoader(subset, batch_size=256, shuffle=False)
             accuracies[name] = float(evaluate_accuracy(self.model, test_loader, self.device))
 
-        return {"n": len(self.split_indices), "accuracies": accuracies, "protos": local_protos}
+        return {"n": len(self.split_indices), "accuracies": accuracies, "protos": local_protos, "counts": local_counts}
 
 
 class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object):  # type: ignore[misc]
@@ -98,12 +99,10 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
         return []
 
     def fit(self, parameters, config):
-        # Unpack global prototypes from server config.
+        # Unpack global prototypes from server config (using pickle).
         global_protos: Dict[int, np.ndarray] = {}
-        for key, val in config.items():
-            if key.startswith("proto_"):
-                class_id = int(key.split("_")[1])
-                global_protos[class_id] = np.array(val, dtype=np.float32)
+        if "protos_bytes" in config:
+            global_protos = pickle.loads(config["protos_bytes"])
 
         train_loader = DataLoader(
             Subset(self.train_ds, self.split_indices),
@@ -115,7 +114,7 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
         lambda_p = float(os.environ.get("LD", os.environ.get("LAMBDA_P", "0.1")))
         train_local_proto(self.model, train_loader, global_protos, self.cfg, lambda_p=lambda_p, progress=progress)
 
-        local_protos = compute_prototypes(self.model, train_loader, self.device)
+        local_protos, local_counts = compute_prototypes(self.model, train_loader, self.device)
 
         # Evaluate on all provided test sets
         accuracies = {}
@@ -126,11 +125,11 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
             test_loader = DataLoader(subset, batch_size=256, shuffle=False)
             accuracies[name] = float(evaluate_accuracy(self.model, test_loader, self.device))
 
-        # Metrics for server: update to return multiple accuracies
+        # Metrics for server: send serialized bytes for prototypes and counts
         metrics: Dict[str, object] = {f"acc_{name}": acc for name, acc in accuracies.items()}
         metrics["accuracy"] = accuracies["local"] # Standard fallback
-        for c, vec in local_protos.items():
-            metrics[f"proto_{c}"] = vec.tolist()
+        metrics["protos_bytes"] = pickle.dumps(local_protos)
+        metrics["counts_bytes"] = pickle.dumps(local_counts)
 
         return [], len(self.split_indices), metrics
 
@@ -176,13 +175,20 @@ def _flower_client_proc(server_address: str, cid: int, split_path: str, cfg_dict
     fl.client.start_numpy_client(server_address=server_address, client=client)
 
 
-def aggregate_prototypes(client_proto_dicts: list[Dict[int, np.ndarray]], num_classes: int = 10) -> Dict[int, np.ndarray]:
-    """Mean-aggregate class-wise prototypes across clients (only for classes present)."""
+def aggregate_prototypes(client_proto_dicts: list[Dict[int, np.ndarray]], client_count_dicts: list[Dict[int, int]], num_classes: int = 10) -> Dict[int, np.ndarray]:
+    """Weighted mean-aggregate class-wise prototypes across clients (Eq 6)."""
     global_protos: Dict[int, np.ndarray] = {}
     for c in range(num_classes):
-        class_protos = [p[c] for p in client_proto_dicts if c in p]
-        if class_protos:
-            global_protos[c] = np.mean(class_protos, axis=0).astype(np.float32)
+        c_protos = []
+        c_counts = []
+        for p_dict, c_dict in zip(client_proto_dicts, client_count_dicts):
+            if c in p_dict and c in c_dict:
+                c_protos.append(p_dict[c])
+                c_counts.append(c_dict[c])
+        if c_protos:
+            total = sum(c_counts)
+            weighted_sum = sum(p * cnt for p, cnt in zip(c_protos, c_counts))
+            global_protos[c] = (weighted_sum / total).astype(np.float32)
     return global_protos
 
 # 2. Simulation Orchestrator
@@ -213,59 +219,64 @@ def main():
     train_head = os.environ.get("TRAIN_HEAD", "1") != "0"
     cfg_train = TrainConfig(epochs=epochs, device=device, train_backbone=train_backbone, train_head=train_head)
 
-    use_flower = os.environ.get("USE_FLOWER", "0") == "1"
+    use_flower = True  # Changed from os.environ.get("USE_FLOWER", "0") == "1"
+    
+    # Prepare Evaluation Test Sets
+    gb_indices = create_balanced_test_indices(test_ds, samples_per_class=100, seed=seed)
+    test_global_balanced = Subset(test_ds, gb_indices)
+    
     if use_flower:
         if fl is None:
             raise RuntimeError("USE_FLOWER=1 but flwr import failed. Install flwr in the active venv.")
 
-        # For multi-process Flower mode, default to CPU unless DEVICE is explicitly set.
-        # (Users can override with DEVICE=cuda, but it may thrash/OOM.)
-        if os.environ.get("DEVICE", "") == "":
-            cfg_train = TrainConfig(
-                epochs=epochs,
-                device="cpu",
-                train_backbone=train_backbone,
-                train_head=train_head,
-            )
-
-        # Ensure split exists on disk so child processes can load it.
-        if not os.path.exists(split_path):
-            save_split(split, split_path)
-
         server_address = os.environ.get("SERVER_ADDRESS", "127.0.0.1:8080")
 
-        mp.set_start_method("spawn", force=True)
-
         print(
-            f"\n>>> Flower gRPC FedProto-style (no Ray) | addr={server_address} | clients={num_clients} rounds={num_rounds} epochs={epochs} LD={os.environ.get('LD', os.environ.get('LAMBDA_P', '0.1'))} device={cfg_train.device} <<<",
+            f"\n>>> Flower Simulation (Virtual Client Engine) | clients={num_clients} rounds={num_rounds} epochs={epochs} LD={os.environ.get('LD', os.environ.get('LAMBDA_P', '0.1'))} device={cfg_train.device} <<<",
             flush=True,
         )
 
-        server = mp.Process(target=_flower_server_proc, args=(server_address, num_rounds, num_clients), daemon=True)
-        server.start()
-        time.sleep(2.0)
+        def client_fn(cid: str) -> fl.client.Client:
+            cid_int = int(cid)
+            seen_classes = get_seen_classes(train_ds, split[cid_int])
+            
+            # Local Aware subsets
+            lc_indices = create_local_aware_indices(test_ds, seen_classes, seed=seed)
+            lcb_indices = create_local_aware_balanced_indices(test_ds, seen_classes, samples_per_class=100, seed=seed)
+            test_local = Subset(test_ds, lc_indices)
+            test_local_balanced = Subset(test_ds, lcb_indices)
+            
+            test_sets = {
+                "global": test_ds,
+                "global_balanced": test_global_balanced,
+                "local": test_local,
+                "local_balanced": test_local_balanced
+            }
+            return FlowerPrototypeClient(cid_int, train_ds, test_sets, split, cfg_train, device).to_client()
+            
+        strategy = PrototypeStrategy(
+            fraction_fit=1.0,
+            fraction_evaluate=1.0,
+            min_fit_clients=num_clients,
+            min_evaluate_clients=num_clients,
+            min_available_clients=num_clients,
+            num_classes=10
+        )
+        
+        # Determine client resources for Ray
+        client_resources = {"num_cpus": 1, "num_gpus": 0.0}
+        if cfg_train.device and "cuda" in str(cfg_train.device):
+            # Assign fractional GPU so multiple virtual clients can run concurrently on same GPU
+            client_resources["num_gpus"] = float(os.environ.get("RAY_NUM_GPUS", "0.2"))
 
-        cfg_dict = {
-            "epochs": cfg_train.epochs,
-            "batch_size": cfg_train.batch_size,
-            "lr": cfg_train.lr,
-            "momentum": cfg_train.momentum,
-            "weight_decay": cfg_train.weight_decay,
-            "device": cfg_train.device,
-            "train_backbone": cfg_train.train_backbone,
-            "train_head": cfg_train.train_head,
-        }
-
-        procs: list[mp.Process] = []
-        for cid in range(num_clients):
-            p = mp.Process(target=_flower_client_proc, args=(server_address, cid, split_path, cfg_dict))
-            p.start()
-            procs.append(p)
-
-        for p in procs:
-            p.join()
-        if server.is_alive():
-            server.join(timeout=5)
+        # Start Ray-based Flower Simulation
+        fl.simulation.start_simulation(
+            client_fn=client_fn,
+            num_clients=num_clients,
+            config=fl.server.ServerConfig(num_rounds=num_rounds),
+            strategy=strategy,
+            client_resources=client_resources
+        )
         return
 
     # Prepare Evaluation Test Sets
@@ -301,6 +312,7 @@ def main():
 
     for r in round_iter:
         round_proto_dicts = []
+        round_count_dicts = []
         round_metrics = {
             "global": [],
             "global_balanced": [],
@@ -314,13 +326,14 @@ def main():
         for client in client_iter:
             out = client.fit(global_prototypes)
             round_proto_dicts.append(out["protos"])
+            round_count_dicts.append(out["counts"])
             for name, acc in out["accuracies"].items():
                 round_metrics[name].append(acc)
             
             if progress and hasattr(client_iter, "set_postfix_str"):
                 client_iter.set_postfix_str(f"local_acc={out['accuracies']['local']:.3f}")
 
-        global_prototypes = aggregate_prototypes(round_proto_dicts, num_classes=10)
+        global_prototypes = aggregate_prototypes(round_proto_dicts, round_count_dicts, num_classes=10)
         
         avgs = {name: float(np.mean(accs)) if accs else 0.0 for name, accs in round_metrics.items()}
         
