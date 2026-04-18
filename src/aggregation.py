@@ -7,8 +7,8 @@ from flwr.server.client_proxy import ClientProxy
 
 class PrototypeStrategy(fl.server.strategy.FedAvg):
     """
-    Custom Flower Strategy for Prototype FL.
-    - Ignores model weights (no weight aggregation).
+    Custom Flower Strategy for Standard FL + Prototype Regularization.
+    - Aggregates model weights via FedAvg (single Global Model).
     - Aggregates class-wise prototypes collected from clients.
     """
     def __init__(self, num_classes: int = 10, **kwargs):
@@ -24,11 +24,14 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
     ) -> Tuple[Optional[Parameters], Dict[str, Scalar]]:
         """
         Server aggregations:
-        1. Ignore parameters (weights).
+        1. Aggregate parameters (weights) via standard FedAvg.
         2. Aggregate prototypes from metrics.
         """
+        # Call the parent FedAvg to aggregate model weights correctly
+        parameters_aggregated, metrics_aggregated = super().aggregate_fit(server_round, results, failures)
+        
         if not results:
-            return None, {}
+            return parameters_aggregated, {}
 
         # 1. Collect prototypes from all clients
         client_protos_list = []
@@ -41,13 +44,22 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         self.global_prototypes = self._aggregate_protos(client_protos_list)
         
         # 3. Report average accuracy across clients
-        accuracies = [fit_res.metrics["accuracy"] for _, fit_res in results if "accuracy" in fit_res.metrics]
+        accuracies = []
+        client_acc_strings = []
+        for _, fit_res in results:
+            if "accuracy" in fit_res.metrics:
+                acc = float(fit_res.metrics["accuracy"])
+                accuracies.append(acc)
+                cid = fit_res.metrics.get("cid", "?")
+                client_acc_strings.append(f"C{cid}: {acc:.2f}")
+
         avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0.0
         
-        print(f"\n[Round {server_round}] Server Aggregated {len(results)} clients. Avg Acc: {avg_acc:.4f}")
+        print(f"\n[Round {server_round}] Server Aggregated {len(results)} clients.")
+        print(f"      -> Avg Acc: {avg_acc:.4f} | Individual: {', '.join(client_acc_strings)}")
 
-        # We return None for parameters because we don't aggregate weights
-        return None, {"avg_accuracy": avg_acc}
+        # We return the aggregated parameters (Global Model) along with average accuracy
+        return parameters_aggregated, {"avg_accuracy": avg_acc}
 
     def configure_fit(
         self, server_round: int, parameters: Parameters, client_manager: fl.server.client_manager.ClientManager

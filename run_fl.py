@@ -27,20 +27,21 @@ class FlowerPrototypeClient(fl.client.NumPyClient):
         
         self.device = cfg.device
         self.model = ResNet18Cifar(num_classes=10).to(self.device)
-        
-        # Load local model state if it exists (Persistence across rounds)
-        self.model_path = f"outputs/models/client_{cid}.pth"
-        os.makedirs("outputs/models", exist_ok=True)
-        if os.path.exists(self.model_path):
-            self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
 
     def get_parameters(self, config):
-        return [] # No weight sharing
+        # 1. Send our trained model weights back to the server
+        return [val.cpu().numpy() for _, val in self.model.state_dict().items()]
 
     def fit(self, parameters, config):
-        """Local Training with Prototypes."""
+        """Local Training with Prototypes + Global Model Weights."""
         server_round = config.get("server_round", "?")
         print(f"  --> [Round {server_round}] Client {self.cid} starting training...")
+        
+        # 0. Load the Global Model weights that the server sent us
+        if parameters is not None and len(parameters) > 0:
+            params_dict = zip(self.model.state_dict().keys(), parameters)
+            state_dict = {k: torch.tensor(v) for k, v in params_dict}
+            self.model.load_state_dict(state_dict, strict=True)
         
         # 1. Unpack global prototypes from bytes
         global_protos = {}
@@ -59,12 +60,10 @@ class FlowerPrototypeClient(fl.client.NumPyClient):
         acc = evaluate_accuracy(self.model, test_loader, self.device)
         print(f"      Client {self.cid} Accuracy: {acc:.4f}")
 
-        # 5. Save local model state
-        torch.save(self.model.state_dict(), self.model_path)
-
         # 6. Send results (Prototypes serialized as bytes in metrics)
         metrics = {
-            "accuracy": acc,
+            "accuracy": float(acc),
+            "cid": int(self.cid),
             "protos_bytes": pickle.dumps(local_protos)
         }
 
