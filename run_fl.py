@@ -8,17 +8,10 @@ import pickle
 from torch.utils.data import DataLoader, Subset
 from typing import Dict
 from tqdm import tqdm
-
-from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, dirichlet_split_indices, load_split, save_split, get_seen_classes
 from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, dirichlet_split_indices, load_split, save_split, get_seen_classes
 from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed
 from src.aggregation import PrototypeStrategy
-from src.eval.test_sets import (
-    create_balanced_test_indices, 
-    create_local_aware_indices, 
-    create_local_aware_balanced_indices
-)
 from src.eval.test_sets import (
     create_balanced_test_indices, 
     create_local_aware_indices, 
@@ -46,10 +39,8 @@ def _select_device() -> str:
 # 1. Define the local client (no Ray/Flower dependency required)
 class LocalPrototypeClient:
     def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split, cfg: TrainConfig):
-    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split, cfg: TrainConfig):
         self.cid = cid
         self.train_ds = train_ds
-        self.test_sets = test_sets
         self.test_sets = test_sets
         self.split_indices = split[cid]
         max_samples = int(os.environ.get("MAX_SAMPLES_PER_CLIENT", "0"))
@@ -91,10 +82,8 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
     """Prototype-only Flower client: shares prototypes, keeps all weights local."""
 
     def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split_indices: np.ndarray, cfg: TrainConfig):
-    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split_indices: np.ndarray, cfg: TrainConfig):
         self.cid = cid
         self.train_ds = train_ds
-        self.test_sets = test_sets
         self.test_sets = test_sets
         self.split_indices = split_indices
         max_samples = int(os.environ.get("MAX_SAMPLES_PER_CLIENT", "0"))
@@ -134,14 +123,6 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
                 continue
             test_loader = DataLoader(subset, batch_size=256, shuffle=False)
             accuracies[name] = float(evaluate_accuracy(self.model, test_loader, self.device))
-        # Evaluate on all provided test sets
-        accuracies = {}
-        for name, subset in self.test_sets.items():
-            if len(subset) == 0:
-                accuracies[name] = 0.0
-                continue
-            test_loader = DataLoader(subset, batch_size=256, shuffle=False)
-            accuracies[name] = float(evaluate_accuracy(self.model, test_loader, self.device))
 
         # Metrics for server: send serialized bytes for prototypes and counts
         metrics: Dict[str, object] = {f"acc_{name}": acc for name, acc in accuracies.items()}
@@ -173,23 +154,6 @@ def _flower_client_proc(server_address: str, cid: int, split_path: str, cfg_dict
     cfg = TrainConfig(**cfg_dict)
     train_ds, test_ds = load_cifar10(Cifar10Config(root="data"))
     split = load_split(split_path)
-    seed = int(os.environ.get("SEED", "42"))
-
-    # Prepare Test Sets (Same logic as main)
-    gb_indices = create_balanced_test_indices(test_ds, samples_per_class=100, seed=seed)
-    test_global_balanced = Subset(test_ds, gb_indices)
-    seen_classes = get_seen_classes(train_ds, split[cid])
-    la_indices = create_local_aware_indices(test_ds, seen_classes)
-    lab_indices = create_local_aware_balanced_indices(test_ds, seen_classes, samples_per_class=100, seed=seed)
-
-    test_sets = {
-        "global": test_ds,
-        "global_balanced": test_global_balanced,
-        "local": Subset(test_ds, la_indices),
-        "local_balanced": Subset(test_ds, lab_indices),
-    }
-
-    client = FlowerPrototypeClient(cid, train_ds, test_sets, split[cid], cfg)
     seed = int(os.environ.get("SEED", "42"))
 
     # Prepare Test Sets (Same logic as main)
@@ -333,25 +297,6 @@ def main():
             "local_balanced": Subset(test_ds, lab_indices),
         }
         clients.append(LocalPrototypeClient(cid, train_ds, client_test_sets, split, cfg_train))
-    # Prepare Evaluation Test Sets
-    gb_indices = create_balanced_test_indices(test_ds, samples_per_class=100, seed=seed)
-    test_global_balanced = Subset(test_ds, gb_indices)
-    
-    clients = []
-    for cid in range(num_clients):
-        seen_classes = get_seen_classes(train_ds, split[cid])
-        
-        # Local Aware subsets
-        la_indices = create_local_aware_indices(test_ds, seen_classes)
-        lab_indices = create_local_aware_balanced_indices(test_ds, seen_classes, samples_per_class=100, seed=seed)
-        
-        client_test_sets = {
-            "global": test_ds,
-            "global_balanced": test_global_balanced,
-            "local": Subset(test_ds, la_indices),
-            "local_balanced": Subset(test_ds, lab_indices),
-        }
-        clients.append(LocalPrototypeClient(cid, train_ds, client_test_sets, split, cfg_train))
 
     # Local prototype-FL loop (no Ray needed)
     global_prototypes: Dict[int, np.ndarray] = {}
@@ -393,8 +338,6 @@ def main():
         
         # 1. Detailed Terminal Output
         print(f"[Round {r}] Avg Accs -> Global: {avgs['global']:.4f} | Local: {avgs['local']:.4f} | Local-Bal: {avgs['local_balanced']:.4f}", flush=True)
-        # 1. Detailed Terminal Output
-        print(f"[Round {r}] Avg Accs -> Global: {avgs['global']:.4f} | Local: {avgs['local']:.4f} | Local-Bal: {avgs['local_balanced']:.4f}", flush=True)
 
         # 2. Save to CSV Output File
         log_dir = "outputs/metrics"
@@ -404,9 +347,6 @@ def main():
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             if not file_exists:
-                headers = ["round", "avg_global", "avg_global_balanced", "avg_local", "avg_local_balanced"]
-                writer.writerow(headers)
-            writer.writerow([r, avgs["global"], avgs["global_balanced"], avgs["local"], avgs["local_balanced"]])
                 headers = ["round", "avg_global", "avg_global_balanced", "avg_local", "avg_local_balanced"]
                 writer.writerow(headers)
             writer.writerow([r, avgs["global"], avgs["global_balanced"], avgs["local"], avgs["local_balanced"]])
