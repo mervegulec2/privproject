@@ -13,9 +13,8 @@ from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed
 from src.aggregation import PrototypeStrategy
 from src.eval.test_sets import (
-    create_balanced_test_indices, 
-    create_local_aware_indices, 
-    create_local_aware_balanced_indices
+    create_local_proportional_indices,
+    create_local_aware_indices
 )
 
 # Flower is optional in this file: USE_FLOWER=1 enables gRPC server+client mode (no Ray).
@@ -157,17 +156,14 @@ def _flower_client_proc(server_address: str, cid: int, split_path: str, cfg_dict
     seed = int(os.environ.get("SEED", "42"))
 
     # Prepare Test Sets (Same logic as main)
-    gb_indices = create_balanced_test_indices(test_ds, samples_per_class=100, seed=seed)
-    test_global_balanced = Subset(test_ds, gb_indices)
     seen_classes = get_seen_classes(train_ds, split[cid])
+    lp_indices = create_local_proportional_indices(test_ds, train_ds, split[cid], total_test_samples=1000, seed=seed)
     la_indices = create_local_aware_indices(test_ds, seen_classes)
-    lab_indices = create_local_aware_balanced_indices(test_ds, seen_classes, samples_per_class=100, seed=seed)
 
     test_sets = {
         "global": test_ds,
-        "global_balanced": test_global_balanced,
+        "local_proportional": Subset(test_ds, lp_indices),
         "local": Subset(test_ds, la_indices),
-        "local_balanced": Subset(test_ds, lab_indices),
     }
 
     client = FlowerPrototypeClient(cid, train_ds, test_sets, split[cid], cfg)
@@ -220,10 +216,6 @@ def main():
 
     use_flower = True  # Changed from os.environ.get("USE_FLOWER", "0") == "1"
     
-    # Prepare Evaluation Test Sets
-    gb_indices = create_balanced_test_indices(test_ds, samples_per_class=100, seed=seed)
-    test_global_balanced = Subset(test_ds, gb_indices)
-    
     if use_flower:
         if fl is None:
             raise RuntimeError("USE_FLOWER=1 but flwr import failed. Install flwr in the active venv.")
@@ -239,17 +231,13 @@ def main():
             cid_int = int(cid)
             seen_classes = get_seen_classes(train_ds, split[cid_int])
             
-            # Local Aware subsets
-            lc_indices = create_local_aware_indices(test_ds, seen_classes, seed=seed)
-            lcb_indices = create_local_aware_balanced_indices(test_ds, seen_classes, samples_per_class=100, seed=seed)
-            test_local = Subset(test_ds, lc_indices)
-            test_local_balanced = Subset(test_ds, lcb_indices)
+            lp_indices = create_local_proportional_indices(test_ds, train_ds, split[cid_int], total_test_samples=1000, seed=seed)
+            la_indices = create_local_aware_indices(test_ds, seen_classes)
             
             test_sets = {
                 "global": test_ds,
-                "global_balanced": test_global_balanced,
-                "local": test_local,
-                "local_balanced": test_local_balanced
+                "local_proportional": Subset(test_ds, lp_indices),
+                "local": Subset(test_ds, la_indices)
             }
             return FlowerPrototypeClient(cid_int, train_ds, test_sets, split[cid_int], cfg_train).to_client()
             
@@ -278,23 +266,17 @@ def main():
         )
         return
 
-    # Prepare Evaluation Test Sets
-    gb_indices = create_balanced_test_indices(test_ds, samples_per_class=100, seed=seed)
-    test_global_balanced = Subset(test_ds, gb_indices)
-    
     clients = []
     for cid in range(num_clients):
         seen_classes = get_seen_classes(train_ds, split[cid])
         
-        # Local Aware subsets
+        lp_indices = create_local_proportional_indices(test_ds, train_ds, split[cid], total_test_samples=1000, seed=seed)
         la_indices = create_local_aware_indices(test_ds, seen_classes)
-        lab_indices = create_local_aware_balanced_indices(test_ds, seen_classes, samples_per_class=100, seed=seed)
         
         client_test_sets = {
             "global": test_ds,
-            "global_balanced": test_global_balanced,
-            "local": Subset(test_ds, la_indices),
-            "local_balanced": Subset(test_ds, lab_indices),
+            "local_proportional": Subset(test_ds, lp_indices),
+            "local": Subset(test_ds, la_indices)
         }
         clients.append(LocalPrototypeClient(cid, train_ds, client_test_sets, split, cfg_train))
 
@@ -314,9 +296,8 @@ def main():
         round_count_dicts = []
         round_metrics = {
             "global": [],
-            "global_balanced": [],
-            "local": [],
-            "local_balanced": []
+            "local_proportional": [],
+            "local": []
         }
         
         client_iter = clients
@@ -337,7 +318,7 @@ def main():
         avgs = {name: float(np.mean(accs)) if accs else 0.0 for name, accs in round_metrics.items()}
         
         # 1. Detailed Terminal Output
-        print(f"[Round {r}] Avg Accs -> Global: {avgs['global']:.4f} | Local: {avgs['local']:.4f} | Local-Bal: {avgs['local_balanced']:.4f}", flush=True)
+        print(f"[Round {r}] Avg Accs -> Global: {avgs['global']:.4f} | Local-Prop: {avgs['local_proportional']:.4f} | Local: {avgs['local']:.4f}", flush=True)
 
         # 2. Save to CSV Output File
         log_dir = "outputs/metrics"
@@ -347,9 +328,9 @@ def main():
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             if not file_exists:
-                headers = ["round", "avg_global", "avg_global_balanced", "avg_local", "avg_local_balanced"]
+                headers = ["round", "avg_global", "avg_local_proportional", "avg_local"]
                 writer.writerow(headers)
-            writer.writerow([r, avgs["global"], avgs["global_balanced"], avgs["local"], avgs["local_balanced"]])
+            writer.writerow([r, avgs["global"], avgs["local_proportional"], avgs["local"]])
 
 if __name__ == "__main__":
     main()
