@@ -1,7 +1,7 @@
 import os
 # Ensure we are running the correct FL script
 print("="*50)
-print("CRITICAL: RUNNING PROTOTYPE FL SYSTEM (20 ROUNDS)")
+print("CRITICAL: RUNNING PROTOTYPE FL SYSTEM (2 ROUNDS)")
 print("="*50)
 
 import torch
@@ -19,7 +19,7 @@ from src.eval.test_sets import (
     create_local_proportional_indices
 )
 import pickle
-from src.utils.logging_utils import save_summary_json, setup_metrics_dir
+from src.utils.logging_utils import save_summary_json, setup_metrics_dir, clear_metrics
 
 # 1. Define the Flower Client
 class FlowerPrototypeClient(fl.client.NumPyClient):
@@ -140,7 +140,8 @@ def main():
         fraction_evaluate=0.0,  # Disable separate evaluation round to avoid crashes (we evaluate in fit)
     )
 
-    # Ensure output directories exist
+    # 0. Prep (Clear old results)
+    clear_metrics()
     setup_metrics_dir()
 
     history = fl.simulation.start_simulation(

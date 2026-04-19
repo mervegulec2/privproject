@@ -7,35 +7,38 @@ def setup_metrics_dir(path: str = "outputs/metrics"):
     if not os.path.exists(path):
         os.makedirs(path)
 
-def save_round_to_csv(round_idx: int, metrics: Dict[str, Any], file_path: str = "outputs/metrics/simulation_results.csv"):
+def clear_metrics(file_path: str = "outputs/metrics/simulation_results.csv"):
+    """Deletes existing metrics file to start fresh."""
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        print(f"Cleared old metrics at: {file_path}")
+
+def save_round_to_csv(round_idx: int, test_type: str, avg_acc: float, client_metrics: Dict[int, float], file_path: str = "outputs/metrics/simulation_results.csv"):
     """
-    Saves aggregated and per-client metrics for a single round to a CSV file.
-    metrics should contain:
-        - avg_global, avg_local_prop, avg_local_aware, overall_avg
-        - client_0_acc, client_1_acc, ... (and other per-client metrics)
+    Saves metrics for a specific test type in a round to a CSV file.
+    Creates 1 row per round per test_type.
     """
     setup_metrics_dir(os.path.dirname(file_path))
     
     file_exists = os.path.isfile(file_path)
     
-    # Identify all keys to define the header
-    header = ["timestamp", "round", "avg_global", "avg_local_prop", "avg_local_aware", "overall_avg"]
-    
-    # Pre-define client columns for stability (0-9)
-    client_cols = []
-    for i in range(10):
-        client_cols.extend([f"client_{i}_global", f"client_{i}_local_prop", f"client_{i}_local_aware"])
-    
+    # Header: timestamp, round, test_type, avg_accuracy, client_0, client_1, ...
+    header = ["timestamp", "round", "test_type", "avg_accuracy"]
+    client_cols = [f"client_{i}" for i in range(10)]
     full_header = header + client_cols
     
     row = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "round": round_idx,
+        "test_type": test_type,
+        "avg_accuracy": avg_acc
     }
-    # Only add metrics that are in our header
-    for k in full_header:
-        if k in metrics:
-            row[k] = metrics[k]
+    
+    # Map client metrics to columns
+    for cid, acc in client_metrics.items():
+        col_name = f"client_{cid}"
+        if col_name in full_header:
+            row[col_name] = acc
     
     with open(file_path, mode='a', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=full_header, extrasaction='ignore')
