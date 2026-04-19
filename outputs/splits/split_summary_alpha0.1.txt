@@ -1,0 +1,59 @@
+# Dirichlet split summary: alpha=0.1 (stronger non-IID)
+# Generated: check_split --alpha 0.1 --seeds 42,123,999
+# Purpose: Fewer classes per client → meaningful class presence inference.
+
+=== Seed=42, alpha=0.1, clients=15 ===
+Client 00: n= 654, classes_present= 5, top3=[('cat', 490), ('deer', 90), ('ship', 70)]
+Client 01: n=1313, classes_present= 8, top3=[('automobile', 1130), ('bird', 89), ('truck', 88)]
+Client 02: n=4396, classes_present= 7, top3=[('dog', 2765), ('frog', 697), ('automobile', 559)]
+Client 03: n=3267, classes_present= 7, top3=[('ship', 1973), ('dog', 1011), ('bird', 164)]
+Client 04: n=2378, classes_present= 6, top3=[('truck', 1679), ('automobile', 528), ('horse', 87)]
+Client 05: n=7822, classes_present= 9, top3=[('airplane', 4236), ('horse', 1670), ('bird', 1282)]
+Client 06: n=1581, classes_present= 6, top3=[('bird', 1282), ('automobile', 152), ('ship', 89)]
+Client 07: n=2528, classes_present= 5, top3=[('deer', 1723), ('dog', 568), ('airplane', 235)]
+Client 08: n=4292, classes_present= 7, top3=[('truck', 2810), ('cat', 1178), ('automobile', 285)]
+Client 09: n=2771, classes_present= 6, top3=[('automobile', 1261), ('deer', 956), ('cat', 258)]
+Client 10: n=5982, classes_present= 8, top3=[('frog', 2441), ('horse', 2308), ('automobile', 571)]
+Client 11: n=1822, classes_present= 7, top3=[('deer', 743), ('dog', 591), ('truck', 276)]
+Client 12: n=4038, classes_present= 8, top3=[('bird', 2140), ('frog', 880), ('deer', 560)]
+Client 13: n=2917, classes_present= 7, top3=[('ship', 2633), ('automobile', 242), ('horse', 26)]
+Client 14: n=4239, classes_present= 5, top3=[('cat', 2545), ('deer', 834), ('frog', 830)]
+Total assigned: 50000
+
+=== Seed=123, alpha=0.1 ===
+Client 00: n=2268, classes_present= 6
+Client 01: n=5584, classes_present= 7
+Client 02: n=3357, classes_present= 5
+Client 03: n=2028, classes_present= 6
+Client 04: n=6479, classes_present= 7
+Client 05: n=5103, classes_present= 8
+Client 06: n=3870, classes_present= 8
+Client 07: n= 628, classes_present= 6
+Client 08: n=2252, classes_present= 6
+Client 09: n=3767, classes_present= 7
+Client 10: n=2809, classes_present= 7
+Client 11: n=7033, classes_present= 9
+Client 12: n=2515, classes_present= 5
+Client 13: n= 671, classes_present= 6
+Client 14: n=1636, classes_present= 7
+Total assigned: 50000
+
+=== Seed=999, alpha=0.1 ===
+Client 00: n=1392, classes_present= 5
+Client 01: n=2514, classes_present= 6
+Client 02: n=3419, classes_present= 6
+Client 03: n=9121, classes_present= 6
+Client 04: n=2069, classes_present= 7
+Client 05: n=2921, classes_present= 7
+Client 06: n= 566, classes_present= 8
+Client 07: n=7199, classes_present= 7
+Client 08: n=2269, classes_present= 4
+Client 09: n=3342, classes_present= 8
+Client 10: n= 721, classes_present= 4
+Client 11: n=1606, classes_present= 9
+Client 12: n=6037, classes_present= 8
+Client 13: n=5639, classes_present= 7
+Client 14: n=1185, classes_present= 7
+Total assigned: 50000
+
+Files: outputs/splits/cifar10_dirichlet_a0.1_seed42.npy, _seed123.npy, _seed999.npy

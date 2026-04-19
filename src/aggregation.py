@@ -2,6 +2,7 @@ import numpy as np
 import flwr as fl
 from typing import List, Dict, Optional, Tuple, Union
 import pickle
+from src.utils.logging_utils import save_round_to_csv
 from flwr.common import Metrics, Scalar, Parameters, FitRes, FitIns, NDArrays, ndarrays_to_parameters, parameters_to_ndarrays
 from flwr.server.client_proxy import ClientProxy
 
@@ -67,6 +68,27 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         print(f"      -> Round Local Proportional Avg  : {avg_p:.4f}")
         print(f"      -> Round Local-Aware Full Avg    : {avg_a:.4f}")
         print(f"      -> Round Overall Client Avg      : {overall_avg:.4f}")
+
+        # 4. Save results to CSV
+        log_metrics = {
+            "avg_global": avg_g,
+            "avg_local_prop": avg_p,
+            "avg_local_aware": avg_a,
+            "overall_avg": overall_avg
+        }
+        
+        # Add per-client metrics for tracking
+        for _, fit_res in results:
+            if "cid" in fit_res.metrics:
+                cid = fit_res.metrics["cid"]
+                if "acc_global" in fit_res.metrics:
+                    log_metrics[f"client_{cid}_global"] = float(fit_res.metrics["acc_global"])
+                if "acc_local_prop" in fit_res.metrics:
+                    log_metrics[f"client_{cid}_local_prop"] = float(fit_res.metrics["acc_local_prop"])
+                if "acc_local_aware" in fit_res.metrics:
+                    log_metrics[f"client_{cid}_local_aware"] = float(fit_res.metrics["acc_local_aware"])
+
+        save_round_to_csv(server_round, log_metrics)
 
         # Return the aggregated parameters
         return parameters_aggregated, {

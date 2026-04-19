@@ -1,0 +1,21 @@
+Client accuracies (alpha=0.3, seed=42)
+client  0: 0.2495
+client  1: 0.2846
+client  2: 0.1653
+client  3: 0.3296
+client  4: 0.2755
+client  5: 0.2340
+client  6: 0.1995
+client  7: 0.1812
+client  8: 0.2179
+client  9: 0.2468
+client 10: 0.2806
+client 11: 0.3309
+client 12: 0.3892
+client 13: 0.2336
+client 14: 0.2921
+
+mean: 0.2607
+std : 0.0604
+min : 0.1653
+max : 0.3892

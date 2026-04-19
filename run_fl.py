@@ -19,6 +19,7 @@ from src.eval.test_sets import (
     create_local_proportional_indices
 )
 import pickle
+from src.utils.logging_utils import save_summary_json, setup_metrics_dir
 
 # 1. Define the Flower Client
 class FlowerPrototypeClient(fl.client.NumPyClient):
@@ -139,13 +140,25 @@ def main():
         fraction_evaluate=0.0,  # Disable separate evaluation round to avoid crashes (we evaluate in fit)
     )
 
-    fl.simulation.start_simulation(
+    # Ensure output directories exist
+    setup_metrics_dir()
+
+    history = fl.simulation.start_simulation(
         client_fn=client_fn,
         num_clients=num_clients,
         config=fl.server.ServerConfig(num_rounds=num_rounds),
         strategy=strategy,
-        client_resources={"num_cpus": 1, "num_gpus": 0.5 if torch.cuda.is_available() else 0}, # Lowered GPU resource to allow some concurrency
+        client_resources={"num_cpus": 1, "num_gpus": 0.5 if torch.cuda.is_available() else 0}, 
     )
+
+    # 3. Save Final Summary
+    save_summary_json(history.__dict__)
+    
+    print("\n" + "="*50)
+    print("SIMULATION COMPLETE")
+    print(f"Results saved to: outputs/metrics/simulation_results.csv")
+    print(f"Summary saved to: outputs/metrics/utility_summary.json")
+    print("="*50 + "\n")
 
 if __name__ == "__main__":
     main()

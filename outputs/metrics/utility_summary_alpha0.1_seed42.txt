@@ -1,0 +1,28 @@
+# Utility summary (FAZ 1)
+# alpha=0.1, seed=42
+# Source: outputs/metrics/client_accuracy.csv
+
+Number of clients: 15
+Mean accuracy:     0.1621
+Std accuracy:      0.0580
+Min accuracy:      0.1000
+Max accuracy:      0.2966
+
+Per-client accuracy:
+--------------------------------------------------
+  Client  0: acc=0.1000  n_train=  654  n_proto=5
+  Client  1: acc=0.1261  n_train= 1313  n_proto=8
+  Client  2: acc=0.2444  n_train= 4396  n_proto=7
+  Client  3: acc=0.1711  n_train= 3267  n_proto=7
+  Client  4: acc=0.1000  n_train= 2378  n_proto=6
+  Client  5: acc=0.2202  n_train= 7822  n_proto=9
+  Client  6: acc=0.1122  n_train= 1581  n_proto=6
+  Client  7: acc=0.1957  n_train= 2528  n_proto=5
+  Client  8: acc=0.1772  n_train= 4292  n_proto=7
+  Client  9: acc=0.1983  n_train= 2771  n_proto=6
+  Client 10: acc=0.2966  n_train= 5982  n_proto=8
+  Client 11: acc=0.1339  n_train= 1822  n_proto=7
+  Client 12: acc=0.1062  n_train= 4038  n_proto=8
+  Client 13: acc=0.1006  n_train= 2917  n_proto=7
+  Client 14: acc=0.1484  n_train= 4239  n_proto=5
+--------------------------------------------------

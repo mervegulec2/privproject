@@ -1,0 +1,8 @@
+# Utility summary (FAZ 1) — latest run
+# alpha0.1_seed42
+# Source: outputs/metrics/client_accuracy.csv
+
+Mean accuracy: 0.1621
+Std:           0.0580
+Min / Max:     0.1000 / 0.2966
+Clients:       15
