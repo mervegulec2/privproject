@@ -8,9 +8,9 @@ import pickle
 from torch.utils.data import DataLoader, Subset
 from typing import Dict
 from tqdm import tqdm
-from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, dirichlet_split_indices, load_split, save_split, get_seen_classes
+from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, dirichlet_split_indices, load_split, get_seen_classes
 from src.models import ResNet18Cifar
-from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed
+from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed, compute_class_weights
 from src.aggregation import PrototypeStrategy
 from src.eval.test_sets import (
     create_local_proportional_indices,
@@ -59,9 +59,12 @@ class LocalPrototypeClient:
             batch_size=self.cfg.batch_size, 
             shuffle=True
         )
-        progress = os.environ.get("PROGRESS", "1") != "0"
+        
+        class_weights = compute_class_weights(self.train_ds, self.split_indices, num_classes=10, device=self.device)
+        
+        progress = os.environ.get("PROGRESS", "0") != "0"
         lambda_p = float(os.environ.get("LD", os.environ.get("LAMBDA_P", "0.1")))
-        train_local_proto(self.model, train_loader, global_protos, self.cfg, lambda_p=lambda_p, progress=progress)
+        train_local_proto(self.model, train_loader, global_protos, self.cfg, lambda_p=lambda_p, progress=progress, cid=self.cid, class_weights=class_weights)
 
         local_protos, local_counts = compute_prototypes(self.model, train_loader, self.device)
         
@@ -93,6 +96,13 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
         self.model = ResNet18Cifar(num_classes=10).to(cfg.device)
         self.device = cfg.device
 
+        # Persist client model across simulated rounds
+        self.model_dir = "outputs/client_models"
+        os.makedirs(self.model_dir, exist_ok=True)
+        self.model_path = os.path.join(self.model_dir, f"client_{self.cid}.pt")
+        if os.path.exists(self.model_path):
+            self.model.load_state_dict(torch.load(self.model_path, map_location=self.device, weights_only=True))
+
     def get_parameters(self, config):
         return []
 
@@ -108,9 +118,14 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
             shuffle=True,
         )
 
-        progress = os.environ.get("PROGRESS", "1") != "0"
+        class_weights = compute_class_weights(self.train_ds, self.split_indices, num_classes=10, device=self.device)
+
+        progress = os.environ.get("PROGRESS", "0") != "0"
         lambda_p = float(os.environ.get("LD", os.environ.get("LAMBDA_P", "0.1")))
-        train_local_proto(self.model, train_loader, global_protos, self.cfg, lambda_p=lambda_p, progress=progress)
+        train_local_proto(self.model, train_loader, global_protos, self.cfg, lambda_p=lambda_p, progress=progress, cid=self.cid, class_weights=class_weights)
+        
+        # Save model after training
+        torch.save(self.model.state_dict(), self.model_path)
 
         local_protos, local_counts = compute_prototypes(self.model, train_loader, self.device)
 
@@ -126,6 +141,7 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
         # Metrics for server: send serialized bytes for prototypes and counts
         metrics: Dict[str, object] = {f"acc_{name}": acc for name, acc in accuracies.items()}
         metrics["accuracy"] = accuracies["local"] # Standard fallback
+        metrics["cid"] = self.cid
         metrics["protos_bytes"] = pickle.dumps(local_protos)
         metrics["counts_bytes"] = pickle.dumps(local_counts)
 
@@ -190,7 +206,7 @@ def aggregate_prototypes(client_proto_dicts: list[Dict[int, np.ndarray]], client
 def main():
     # Parameters
     num_clients = int(os.environ.get("NUM_CLIENTS", "10"))
-    num_rounds = int(os.environ.get("NUM_ROUNDS", "20"))
+    num_rounds = int(os.environ.get("NUM_ROUNDS", "2"))
     alpha = float(os.environ.get("ALPHA", "0.1"))
     seed = int(os.environ.get("SEED", "42"))
     device = _select_device()
@@ -243,9 +259,9 @@ def main():
             
         strategy = PrototypeStrategy(
             fraction_fit=1.0,
-            fraction_evaluate=1.0,
+            fraction_evaluate=0.0,
             min_fit_clients=num_clients,
-            min_evaluate_clients=num_clients,
+            min_evaluate_clients=0,
             min_available_clients=num_clients,
             num_classes=10
         )

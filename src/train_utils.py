@@ -24,6 +24,8 @@ def train_local_proto(
     cfg: TrainConfig,
     lambda_p: float = 0.05,
     progress: bool = False,
+    cid: int = -1,
+    class_weights: torch.Tensor = None,
 ):
     """Collaborative training with Prototype Alignment Loss."""
     model.to(cfg.device)
@@ -44,7 +46,7 @@ def train_local_proto(
     opt = torch.optim.SGD(trainable_params, lr=cfg.lr, momentum=cfg.momentum, weight_decay=cfg.weight_decay)
     
     use_amp = (cfg.device == "cuda")
-    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     # Convert global prototypes to torch tensors on correct device
     g_protos_torch = {int(c): torch.tensor(v, dtype=torch.float32, device=cfg.device) for c, v in global_protos.items()}
@@ -72,9 +74,12 @@ def train_local_proto(
             x, y = x.to(cfg.device), y.to(cfg.device)
             opt.zero_grad()
             
-            with torch.amp.autocast('cuda', enabled=use_amp):
+            with torch.cuda.amp.autocast(enabled=use_amp):
                 logits, emb = model(x)
-                ce_loss = F.cross_entropy(logits, y)
+                if class_weights is not None:
+                    ce_loss = F.cross_entropy(logits, y, weight=class_weights)
+                else:
+                    ce_loss = F.cross_entropy(logits, y)
                 
                 # Prototype Alignment Loss (FedProto Algorithm 1):
                 # Compute local batch prototype per class, then distance to global prototype.
@@ -100,8 +105,15 @@ def train_local_proto(
             scaler.step(opt)
             scaler.update()
             
+            
             total_loss += float(loss.item()) * x.size(0)
             total += x.size(0)
+        
+        epoch_loss = total_loss / total if total > 0 else 0
+        if not progress:
+            # Simple log, easily readable in Ray and normal console
+            print(f"[Client {cid}] Epoch {ep+1}/{cfg.epochs} - Loss: {epoch_loss:.4f}", flush=True)
+            
     return total_loss / total if total > 0 else 0
 
 @torch.no_grad()
@@ -134,6 +146,27 @@ def compute_prototypes(model, loader: DataLoader, device: str, num_classes: int 
             prototypes[c] = (sums[c] / counts[c]).astype(np.float32)
             class_counts[c] = counts[c]
     return prototypes, class_counts
+
+def compute_class_weights(dataset, indices, num_classes=10, device="cpu"):
+    """Computes inverse frequency class weights to balance heavily skewed local data."""
+    if hasattr(dataset, "targets"):
+        targets = np.array(dataset.targets)
+    else:
+        # Fallback for datasets without .targets array exposed
+        targets = np.array([dataset[i][1] for i in range(len(dataset))])
+        
+    local_targets = targets[indices]
+    classes, counts = np.unique(local_targets, return_counts=True)
+    
+    weights = np.zeros(num_classes, dtype=np.float32)
+    total_samples = len(local_targets)
+    
+    # Use len(classes) so the expected weight is 1.0 for the classes actually present
+    for c, count in zip(classes, counts):
+        if count > 0:
+            weights[c] = total_samples / (len(classes) * count)
+            
+    return torch.tensor(weights, dtype=torch.float32, device=device)
 
 def evaluate_accuracy(model, test_loader: DataLoader, device: str) -> float:
     model.to(device)
