@@ -43,23 +43,38 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         # 2. Aggregate prototypes
         self.global_prototypes = self._aggregate_protos(client_protos_list)
         
-        # 3. Report average accuracy across clients
-        accuracies = []
-        client_acc_strings = []
+        # 3. Report averages across clients for all test sets
+        acc_globals = []
+        acc_local_props = []
+        acc_local_awares = []
+        
         for _, fit_res in results:
-            if "accuracy" in fit_res.metrics:
-                acc = float(fit_res.metrics["accuracy"])
-                accuracies.append(acc)
-                cid = fit_res.metrics.get("cid", "?")
-                client_acc_strings.append(f"C{cid}: {acc:.2f}")
+            if "acc_global" in fit_res.metrics:
+                acc_globals.append(float(fit_res.metrics["acc_global"]))
+            if "acc_local_prop" in fit_res.metrics:
+                acc_local_props.append(float(fit_res.metrics["acc_local_prop"]))
+            if "acc_local_aware" in fit_res.metrics:
+                acc_local_awares.append(float(fit_res.metrics["acc_local_aware"]))
 
-        avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0.0
+        avg_g = sum(acc_globals) / len(acc_globals) if acc_globals else 0.0
+        avg_p = sum(acc_local_props) / len(acc_local_props) if acc_local_props else 0.0
+        avg_a = sum(acc_local_awares) / len(acc_local_awares) if acc_local_awares else 0.0
+        
+        overall_avg = (avg_g + avg_p + avg_a) / 3.0
         
         print(f"\n[Round {server_round}] Server Aggregated {len(results)} clients.")
-        print(f"      -> Avg Acc: {avg_acc:.4f} | Individual: {', '.join(client_acc_strings)}")
+        print(f"      -> Round Global Standard Avg     : {avg_g:.4f}")
+        print(f"      -> Round Local Proportional Avg  : {avg_p:.4f}")
+        print(f"      -> Round Local-Aware Full Avg    : {avg_a:.4f}")
+        print(f"      -> Round Overall Client Avg      : {overall_avg:.4f}")
 
-        # We return the aggregated parameters (Global Model) along with average accuracy
-        return parameters_aggregated, {"avg_accuracy": avg_acc}
+        # Return the aggregated parameters
+        return parameters_aggregated, {
+            "avg_global": avg_g,
+            "avg_local_prop": avg_p,
+            "avg_local_aware": avg_a,
+            "overall_avg": overall_avg
+        }
 
     def configure_fit(
         self, server_round: int, parameters: Parameters, client_manager: fl.server.client_manager.ClientManager

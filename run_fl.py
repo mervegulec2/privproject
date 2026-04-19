@@ -14,6 +14,10 @@ from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, di
 from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed
 from src.aggregation import PrototypeStrategy
+from src.eval.test_sets import (
+    create_local_aware_indices,
+    create_local_proportional_indices
+)
 import pickle
 
 # 1. Define the Flower Client
@@ -55,14 +59,42 @@ class FlowerPrototypeClient(fl.client.NumPyClient):
         # 3. Compute local prototypes
         local_protos = compute_prototypes(self.model, train_loader, self.device)
         
-        # 4. Local Evaluation
+        # 4. Local Evaluation (3 Test Sets)
+        
+        # Get seen classes
+        if hasattr(self.train_ds, "targets"):
+            train_targets = np.array(self.train_ds.targets)
+        else:
+            train_targets = np.array([self.train_ds[i][1] for i in range(len(self.train_ds))])
+        
+        client_labels = train_targets[self.split_indices]
+        seen_classes = set(np.unique(client_labels))
+        
+        # Test 1: Global Standard
         test_loader = DataLoader(self.test_ds, batch_size=256, shuffle=False)
-        acc = evaluate_accuracy(self.model, test_loader, self.device)
-        print(f"      Client {self.cid} Accuracy: {acc:.4f}")
+        acc_global = evaluate_accuracy(self.model, test_loader, self.device)
+        
+        # Test 2: Local Proportional
+        local_prop_idx = create_local_proportional_indices(self.test_ds, self.train_ds, self.split_indices, seed=42)
+        local_prop_loader = DataLoader(Subset(self.test_ds, local_prop_idx), batch_size=256, shuffle=False)
+        acc_local_prop = evaluate_accuracy(self.model, local_prop_loader, self.device)
+        
+        # Test 3: Local-Aware Full
+        local_aware_idx = create_local_aware_indices(self.test_ds, seen_classes)
+        local_aware_loader = DataLoader(Subset(self.test_ds, local_aware_idx), batch_size=256, shuffle=False)
+        acc_local_aware = evaluate_accuracy(self.model, local_aware_loader, self.device)
+        
+        avg_tests_acc = (acc_global + acc_local_prop + acc_local_aware) / 3.0
+        
+        print(f"      Client {self.cid} Eval -> Global: {acc_global:.4f} | Local-Prop: {acc_local_prop:.4f} | Local-Aware: {acc_local_aware:.4f} | Avg: {avg_tests_acc:.4f}")
 
         # 6. Send results (Prototypes serialized as bytes in metrics)
         metrics = {
-            "accuracy": float(acc),
+            "accuracy": float(acc_global), # Standard tracking
+            "acc_global": float(acc_global),
+            "acc_local_prop": float(acc_local_prop),
+            "acc_local_aware": float(acc_local_aware),
+            "avg_tests_acc": float(avg_tests_acc),
             "cid": int(self.cid),
             "protos_bytes": pickle.dumps(local_protos)
         }
@@ -95,7 +127,7 @@ def main():
     else:
         split = load_split(split_path)
 
-    cfg_train = TrainConfig(epochs=1, device=device)
+    cfg_train = TrainConfig(epochs=5, device=device)
 
     def client_fn(cid: str) -> FlowerPrototypeClient:
         return FlowerPrototypeClient(int(cid), train_ds, test_ds, split, cfg_train)
