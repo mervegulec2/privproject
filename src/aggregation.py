@@ -43,14 +43,49 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         # 2. Aggregate prototypes using weighted average (Eq 6)
         self.global_prototypes = self._aggregate_protos(client_protos_list, client_counts_list)
         
-        # 3. Report average accuracy across clients
-        accuracies = [fit_res.metrics["accuracy"] for _, fit_res in results if "accuracy" in fit_res.metrics]
-        avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0.0
+        # 3. Report detailed accuracy across clients
+        accs_global = []
+        accs_local_prop = []
+        accs_local = []
         
-        print(f"\n[Round {server_round}] Server Aggregated {len(results)} clients. Avg Acc: {avg_acc:.4f}")
+        # Prepare output text
+        import os
+        log_dir = "outputs/metrics"
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, "flower_results.txt")
+        
+        log_lines = []
+        log_lines.append(f"\n[Round {server_round}] Server Aggregated {len(results)} clients.")
+        
+        for _, fit_res in results:
+            metrics = fit_res.metrics
+            cid = metrics.get("cid", "?")
+            msg = f"  - Client {cid}: "
+            
+            if "acc_global" in metrics:
+                accs_global.append(metrics["acc_global"])
+                msg += f"Global: {metrics['acc_global']:.4f} "
+            if "acc_local_proportional" in metrics:
+                accs_local_prop.append(metrics["acc_local_proportional"])
+                msg += f"Local-Prop: {metrics['acc_local_proportional']:.4f} "
+            if "acc_local" in metrics:
+                accs_local.append(metrics["acc_local"])
+                msg += f"Local: {metrics['acc_local']:.4f}"
+            log_lines.append(msg)
+            
+        avg_g = sum(accs_global) / len(accs_global) if accs_global else 0.0
+        avg_lp = sum(accs_local_prop) / len(accs_local_prop) if accs_local_prop else 0.0
+        avg_l = sum(accs_local) / len(accs_local) if accs_local else 0.0
+        
+        log_lines.append(f"| Avg Accs -> Global: {avg_g:.4f} | Local-Prop: {avg_lp:.4f} | Local: {avg_l:.4f}")
+
+        log_str = "\n".join(log_lines)
+        print(log_str) # Keep it in terminal in case user looks
+        with open(log_file, "a") as f:
+            f.write(log_str + "\n")
 
         # Return empty parameters because we don't aggregate weights
-        return ndarrays_to_parameters([]), {"avg_accuracy": avg_acc}
+        return ndarrays_to_parameters([]), {"avg_accuracy": avg_l}
 
     def configure_fit(
         self, server_round: int, parameters: Parameters, client_manager: fl.server.client_manager.ClientManager
