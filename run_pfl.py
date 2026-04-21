@@ -348,5 +348,15 @@ def main():
                 writer.writerow(headers)
             writer.writerow([r, avgs["global"], avgs["local_proportional"], avgs["local"]])
 
+        # 3. Save final local prototypes and models at the last round
+        if r == num_rounds:
+            model_dir = "outputs/client_models"
+            os.makedirs(model_dir, exist_ok=True)
+            for client in clients:
+                torch.save(client.model.state_dict(), os.path.join(model_dir, f"client_{client.cid}.pt"))
+            
+            with open(os.path.join(log_dir, "final_local_protos.pkl"), "wb") as f:
+                pickle.dump(round_proto_dicts, f)
+
 if __name__ == "__main__":
     main()
