@@ -239,6 +239,9 @@ def main():
     epochs = int(os.environ.get("EPOCHS", "5"))
     train_backbone = os.environ.get("TRAIN_BACKBONE", "1") != "0"
     train_head = os.environ.get("TRAIN_HEAD", "1") != "0"
+    
+    cfg_train = TrainConfig(epochs=epochs, device=device, train_backbone=train_backbone, train_head=train_head)
+
     # 2. Security Setup (Modular & Configurable)
     security_cfg = {
         "enable_logging": os.environ.get("SECURITY_LOGGING", "1") == "1",

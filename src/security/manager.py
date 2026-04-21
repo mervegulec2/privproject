@@ -69,12 +69,21 @@ class SecurityManager:
 
 def create_security_manager(config: Dict[str, Any]) -> SecurityManager:
     """Factory to create manager from a config dictionary."""
-    # This will be expanded as we implement specific attack/defense classes
     defenses = []
     attacks = []
     
-    # Placeholder for factory logic
-    # if config.get("use_dp"): defenses.append(DifferentialPrivacyDefense(...))
+    # Placeholder for defenses
+    # if "dp" in config.get("defenses", []):
+    #     defenses.append(DifferentialPrivacyDefense(...))
+    
+    # Load Attacks
+    active_attack_names = config.get("attacks", [])
+    if "reconstruction" in active_attack_names:
+        from src.security.attacks.reconstruction import PrototypeReconstructionAttack
+        attacks.append(PrototypeReconstructionAttack(
+            iterations=500, # Can be moved to config later
+            lr=1.0
+        ))
     
     return SecurityManager(
         active_defenses=defenses,
