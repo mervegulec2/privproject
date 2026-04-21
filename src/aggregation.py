@@ -4,6 +4,7 @@ from typing import List, Dict, Optional, Tuple, Union
 from flwr.common import Metrics, Scalar, Parameters, FitRes, FitIns, NDArrays, ndarrays_to_parameters, parameters_to_ndarrays
 from flwr.server.client_proxy import ClientProxy
 import pickle
+import os
 
 class PrototypeStrategy(fl.server.strategy.FedAvg):
     """
@@ -11,10 +12,11 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
     - Ignores model weights (no weight aggregation).
     - Aggregates class-wise prototypes collected from clients.
     """
-    def __init__(self, num_classes: int = 10, **kwargs):
+    def __init__(self, num_classes: int = 10, run_id: str = "", **kwargs):
         super().__init__(**kwargs)
         self.num_classes = num_classes
         self.global_prototypes: Dict[int, np.ndarray] = {}
+        self.run_id = run_id
 
     def aggregate_fit(
         self,
@@ -40,8 +42,39 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
             client_protos_list.append(protos)
             client_counts_list.append(counts)
 
+        # Log client uploads
+        round_dir = os.path.abspath(os.path.join("runs", self.run_id, f"round_{server_round}"))
+        os.makedirs(round_dir, exist_ok=True)
+        os.makedirs(os.path.join(round_dir, "clients"), exist_ok=True)
+        for i, (_, fit_res) in enumerate(results):
+            protos, counts = self._unpack_prototypes(fit_res.metrics)
+            cid = fit_res.metrics.get("cid", i)
+            sent_classes = list(protos.keys())
+            upload = {
+                "client_id": cid,
+                "round": server_round,
+                "phase": "pre_upload",
+                "sent_artifact_type": "classwise_proto",
+                "sent_classes": sent_classes,
+                "prototype_dict": protos,
+                "class_counts": counts,
+                "proto_dim": protos[sent_classes[0]].shape[0] if sent_classes else 0,
+                "n_sent_classes": len(sent_classes)
+            }
+            with open(os.path.join(round_dir, "clients", f"client_{cid}_upload.pkl"), "wb") as f:
+                pickle.dump(upload, f)
+
         # 2. Aggregate prototypes using weighted average (Eq 6)
         self.global_prototypes = self._aggregate_protos(client_protos_list, client_counts_list)
+        
+        # Log server artifact
+        server_artifact = {
+            "global_prototypes": self.global_prototypes,
+            "server_reply": self.global_prototypes,
+            "global_metrics": {"avg_accuracy": avg_l}
+        }
+        with open(os.path.join(round_dir, "server_artifact.pkl"), "wb") as f:
+            pickle.dump(server_artifact, f)
         
         # 3. Report detailed accuracy across clients
         accs_global = []
@@ -49,7 +82,6 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         accs_local = []
         
         # Prepare output text
-        import os
         log_dir = "outputs/metrics"
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "flower_results.txt")

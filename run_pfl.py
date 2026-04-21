@@ -5,6 +5,7 @@ import torch
 import csv
 import numpy as np
 import pickle
+import json
 from torch.utils.data import DataLoader, Subset
 from typing import Dict
 from tqdm import tqdm
@@ -214,6 +215,33 @@ def main():
     set_seed(seed)
     train_ds, test_ds = load_cifar10(Cifar10Config(root="data"))
     
+    # Generate run_id and create directories
+    run_id = f"cifar10_a{alpha}_s{seed}_c{num_clients}_r{num_rounds}"
+    run_dir = os.path.abspath(f"runs/{run_id}")
+    os.makedirs(run_dir, exist_ok=True)
+    
+    # Save meta.json
+    meta = {
+        "run_id": run_id,
+        "dataset": "cifar10",
+        "seed": seed,
+        "alpha": alpha,
+        "n_clients": num_clients,
+        "n_classes": 10,
+        "one_shot": num_rounds == 1,
+        "personalized": True,
+        "protocol_name": "classwise_proto",
+        # Explicitly document which fields are sent to the server (honest-but-curious constraints)
+        "sent_fields": {
+            "prototypes": True,
+            "class_counts": True,
+            "client_metrics": True,
+            "client_raw_data": False
+        }
+    }
+    with open(f"{run_dir}/meta.json", "w") as f:
+        json.dump(meta, f, indent=2)
+    
     # Load Split
     split_path = f"outputs/splits/cifar10_dirichlet_a{alpha}_s{seed}_c{num_clients}.npy"
     if not os.path.exists(split_path):
@@ -230,7 +258,7 @@ def main():
     train_head = os.environ.get("TRAIN_HEAD", "1") != "0"
     cfg_train = TrainConfig(epochs=epochs, device=device, train_backbone=train_backbone, train_head=train_head)
 
-    use_flower = True  # Changed from os.environ.get("USE_FLOWER", "0") == "1"
+    use_flower = os.environ.get("USE_FLOWER", "0") == "1"
     
     if use_flower:
         if fl is None:
@@ -263,7 +291,8 @@ def main():
             min_fit_clients=num_clients,
             min_evaluate_clients=0,
             min_available_clients=num_clients,
-            num_classes=10
+            num_classes=10,
+            run_id=run_id
         )
         
         # Determine client resources for Ray
@@ -308,6 +337,10 @@ def main():
         round_iter = tqdm(round_iter, desc="Rounds")
 
     for r in round_iter:
+        round_dir = os.path.join(run_dir, f"round_{r}")
+        os.makedirs(round_dir, exist_ok=True)
+        os.makedirs(os.path.join(round_dir, "clients"), exist_ok=True)
+        
         round_proto_dicts = []
         round_count_dicts = []
         round_metrics = {
@@ -326,12 +359,37 @@ def main():
             for name, acc in out["accuracies"].items():
                 round_metrics[name].append(acc)
             
+            # Log client upload
+            sent_classes = list(out["protos"].keys())
+            upload = {
+                "client_id": client.cid,
+                "round": r,
+                "phase": "pre_upload",
+                "sent_artifact_type": "classwise_proto",
+                "sent_classes": sent_classes,
+                "prototype_dict": out["protos"],
+                "class_counts": out["counts"],
+                "proto_dim": out["protos"][sent_classes[0]].shape[0] if sent_classes else 0,
+                "n_sent_classes": len(sent_classes)
+            }
+            with open(os.path.join(round_dir, "clients", f"client_{client.cid}_upload.pkl"), "wb") as f:
+                pickle.dump(upload, f)
+            
             if progress and hasattr(client_iter, "set_postfix_str"):
                 client_iter.set_postfix_str(f"local_acc={out['accuracies']['local']:.3f}")
 
         global_prototypes = aggregate_prototypes(round_proto_dicts, round_count_dicts, num_classes=10)
         
         avgs = {name: float(np.mean(accs)) if accs else 0.0 for name, accs in round_metrics.items()}
+        
+        # Log server artifact
+        server_artifact = {
+            "global_prototypes": global_prototypes,
+            "server_reply": global_prototypes,
+            "global_metrics": avgs
+        }
+        with open(os.path.join(round_dir, "server_artifact.pkl"), "wb") as f:
+            pickle.dump(server_artifact, f)
         
         # 1. Detailed Terminal Output
         print(f"[Round {r}] Avg Accs -> Global: {avgs['global']:.4f} | Local-Prop: {avgs['local_proportional']:.4f} | Local: {avgs['local']:.4f}", flush=True)
@@ -347,16 +405,6 @@ def main():
                 headers = ["round", "avg_global", "avg_local_proportional", "avg_local"]
                 writer.writerow(headers)
             writer.writerow([r, avgs["global"], avgs["local_proportional"], avgs["local"]])
-
-        # 3. Save final local prototypes and models at the last round
-        if r == num_rounds:
-            model_dir = "outputs/client_models"
-            os.makedirs(model_dir, exist_ok=True)
-            for client in clients:
-                torch.save(client.model.state_dict(), os.path.join(model_dir, f"client_{client.cid}.pt"))
-            
-            with open(os.path.join(log_dir, "final_local_protos.pkl"), "wb") as f:
-                pickle.dump(round_proto_dicts, f)
 
 if __name__ == "__main__":
     main()

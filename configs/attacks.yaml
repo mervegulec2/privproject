@@ -1,0 +1,29 @@
+# Global attack runner configuration
+run_glob: "runs/*"
+output_dir: "attack_outputs"
+seeds: [42]
+report_format: ["json", "csv"]
+pooling_mode: "pooled"
+# General attack configuration
+attacks:
+  cpa:
+    enabled: true
+    types: ["trivial"]
+    default_type: "trivial"
+
+  mia:
+    enabled: true
+    modes: ["feasibility"]
+    default_mode: "feasibility"
+
+# Evaluation settings
+evaluation:
+  metrics: ["roc_auc", "pr_auc", "tpr_at_1_fpr", "tpr_at_0_1_fpr"]
+  cross_validation: false
+  n_folds: 5
+
+# Output settings
+output:
+  save_results: true
+  save_predictions: false
+  verbose: true

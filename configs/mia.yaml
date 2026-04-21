@@ -1,0 +1,30 @@
+strict_server_mode: true
+future_extended_mode: false
+allowed_features: ["prototypes", "class_counts"]
+metric_list: ["roc_auc", "pr_auc", "tpr_at_1_fpr"]
+# MIA attack configuration
+mia:
+  feasibility:
+    description: "Assess MIA feasibility with current artifacts"
+    check_signals: ["global_prototypes", "client_prototypes", "class_counts"]
+
+  # Future statistical MIA configs
+  mean_var:
+    enabled: false
+    description: "MIA using mean and variance statistics"
+    distance_metric: "mahalanobis"
+
+  mean_cov:
+    enabled: false
+    description: "MIA using mean and full covariance"
+    distance_metric: "mahalanobis"
+
+# Dataset settings
+dataset:
+  # Note: Current protocol doesn't allow direct MIA dataset construction
+  construction_method: "statistical"  # vs "direct"
+
+# Evaluation
+evaluation:
+  metrics: ["roc_auc", "pr_auc", "tpr_at_1_fpr"]
+  threshold_tuning: true

@@ -1,0 +1,27 @@
+num_classes: 10
+evaluate_per_class: true
+protocol_leakage_mode: true
+# CPA attack configuration
+cpa:
+  trivial:
+    description: "Protocol leakage based CPA"
+    prediction_rule: "class_present = key_sent"
+
+  # Future learned CPA config
+  learned:
+    enabled: false
+    model: "logistic_regression"
+    features: ["seen_as_key", "count"]
+    hyperparameters:
+      C: 1.0
+      max_iter: 1000
+
+# Dataset settings
+dataset:
+  include_counts: true
+  balance_classes: false
+
+# Evaluation
+evaluation:
+  metrics: ["accuracy", "balanced_accuracy", "roc_auc", "pr_auc"]
+  per_class: true

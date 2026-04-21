@@ -1,0 +1,11 @@
+{
+  "run_id": "cifar10_a0.1_s42_c2_r1",
+  "dataset": "cifar10",
+  "seed": 42,
+  "alpha": 0.1,
+  "n_clients": 2,
+  "n_classes": 10,
+  "one_shot": true,
+  "personalized": true,
+  "protocol_name": "classwise_proto"
+}
