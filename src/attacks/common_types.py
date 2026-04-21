@@ -3,7 +3,7 @@ Common type definitions for attack framework.
 """
 
 from typing import Dict, List, Any, Optional, NamedTuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 
 
@@ -27,7 +27,8 @@ class FeasibilityReport:
     reason: str
     available_signals: List[str]
     recommended_approach: str
-    metadata: Dict[str, Any]
+    required_future_artifacts: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

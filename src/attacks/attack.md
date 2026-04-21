@@ -36,7 +36,7 @@ verilerle yapılabilir. Server'a gitmeyen hiçbir local-only bilgi kullanılmaya
   - `mia_dataset.py`: server-visible sinyallere göre feasibility analizi.
   - `mia_baselines.py`: scorer interface ve feasibility helper'lar.
   - `mia_features.py`: feature mode tanımları (current vs future).
-  - `mia_eval.py`: feasibility + placeholder evaluator.
+  - `mia_eval.py`: feasibility evaluator (çıktı: `status`, `reason`, `required_future_artifacts`).
 
 - Runner ve yardımcılar:
   - `run_cpa.py`, `run_mia.py`, `run_attacks.py`
@@ -71,7 +71,10 @@ membership inference için şu sınırlamalar vardır:
 - Server, örnek-seviyesinde embedding/özellik görmediği için doğrudan örnek-temelli MIA zor.
 - Ancak sınıf-başına dağılım/ortalama/var gibi istatistikler ileride gönderilirse MIA daha mümkün hale gelir.
 
-Gelecekte eklenecek scoring (şimdilik TODO): mean/var tabanlı Mahalanobis-like skorlar,
+Bu nedenle MIA tarafı şu an **feasibility-first**: evaluator, koşullara göre
+`status = failed|limited` ile birlikte `reason` ve `required_future_artifacts` alanlarını raporlar.
+
+Gelecekte eklenecek scoring (future extension): mean/var tabanlı Mahalanobis-like skorlar,
 örnek bir skor formu (diagonal covariance varsayımıyla):
 
 $$
@@ -94,11 +97,20 @@ proje seviyesinde `attack_outputs/cpa/` ve `attack_outputs/mia/` dizinleri yer a
 
 ## Literatür (seçme)
 
-- Shokri, R., Stronati, M., Song, C., Shmatikov, V., "Membership Inference Attacks against Machine Learning Models", 2017.
-- Nasr, M., Shokri, R., Houmansadr, A., "Comprehensive Privacy Analysis of Deep Learning: Standalone and Federated Learning", 2019.
-- Wang et al., "Protocol leakage and privacy risks in prototype-based sharing", 2019. (prototypical model leakage discussion)
+- **FedProto** — class-wise prototype sharing surface (communication artifact).  
+  (Örn. “FedProto: Federated Prototype Learning across Heterogeneous Clients”, 2021)
+- **Lixu Wang et al., “Eavesdrop the Composition Proportion of Training Labels in Federated Learning”, 2019** — protocol leakage / CPA çizgisi.
+- **Nasr et al., “Comprehensive Privacy Analysis of Deep Learning: Standalone and Federated Learning”, 2019** — FL’de MIA çerçevesi (passive/active).
+- Shokri et al., “Membership Inference Attacks against Machine Learning Models”, 2017 — genel MIA başlangıcı (bu setting için omurga referans değil).
 
 (Not: yukarıdaki başlıklar literatürde bilinen çalışmalara karşılık gelmektedir; tam bibliyografik referanslar README/docs içinde genişletilebilir.)
+
+## One-shot / Personalized notu
+
+- Bu dalın saldırı yüzeyi **server-visible upload snapshot**’ına odaklanır (one-shot).
+- Eğer protokol personalized ise, leakage yüzeyi ikiye ayrılabilir:
+  - **pre-upload**: client’ın upload ettiği artifact (bu dalın odaklandığı yüzey)
+  - **post-personalization**: client’ın yerelde yaptığı personalization adımı (strict server modelde server’a görünmez)
 
 ## Nasıl kullanılır (hızlı)
 
@@ -117,8 +129,8 @@ python tools/audit_attacks.py runs/cifar10_a0.1_s42_c2_r1
 ## Son notlar ve TODO'lar
 
 - `cpa_dataset.py` ve `cpa_features.py` tamamlandı; learned CPA için ek feature'lar ileride eklenecek.
-- `mia` tarafı şu an feasibility-first: gerçek MIA pipeline'ı için sample-level representation'ın
-  server-visible hale gelmesi gerekiyor (veya server'ın publish ettiği summary statistics artırılmalı).
+- `mia` tarafı feasibility-first: record-level MIA için ek server-visible artifact gerekir
+  (örn. per-class mean/var veya mean/cov + server-visible query representation \(z\)).
 - Kritik kural: hiçbir attack modülü local-only veriyi kullanmamalıdır. `tools/audit_attacks.py`
   bu kuralı taramak için kullanılabilir.
 

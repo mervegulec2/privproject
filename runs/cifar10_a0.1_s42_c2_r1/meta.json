@@ -7,5 +7,11 @@
   "n_classes": 10,
   "one_shot": true,
   "personalized": true,
-  "protocol_name": "classwise_proto"
+  "protocol_name": "classwise_proto",
+  "sent_fields": {
+    "prototypes": true,
+    "class_counts": true,
+    "client_metrics": true,
+    "client_raw_data": false
+  }
 }

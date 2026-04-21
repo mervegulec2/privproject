@@ -1,9 +1,11 @@
 """I/O helpers for attack framework.
 
-Only expose server-visible artifacts. Functions here read
-`runs/{run_id}/meta.json`, per-round `server_artifact.pkl`, and
-`clients/client_{cid}_upload.pkl` files, but only return fields
-that `meta.json` marks as sent (honest-but-curious threat model).
+CRITICAL: Only expose server-visible artifacts.
+
+These utilities load run artifacts from `runs/{run_id}/...` but only return
+fields which are explicitly marked as sent in `meta.json["sent_fields"]`.
+This enforces the strict honest-but-curious server threat model: attacks must
+not use local-only information that never reached the server.
 """
 
 import os
@@ -145,73 +147,3 @@ def result_to_json(result: Any) -> Any:
         return o
 
     return _sanitize(data)
-"""
-Common I/O utilities for attack framework.
-Handles loading runs, parsing artifacts, and logging utilities.
-"""
-
-import os
-import pickle
-import json
-from typing import Dict, List, Any, Optional
-from pathlib import Path
-
-
-def load_run_meta(run_dir: str) -> Dict[str, Any]:
-    """Load meta.json from a run directory."""
-    meta_path = os.path.join(run_dir, "meta.json")
-    with open(meta_path, "r") as f:
-        return json.load(f)
-
-
-def load_client_upload(run_dir: str, round_num: int, client_id: int) -> Dict[str, Any]:
-    """Load client upload pickle for a specific round and client."""
-    upload_path = os.path.join(run_dir, f"round_{round_num}", "clients", f"client_{client_id}_upload.pkl")
-    with open(upload_path, "rb") as f:
-        return pickle.load(f)
-
-
-def load_server_artifact(run_dir: str, round_num: int) -> Dict[str, Any]:
-    """Load server artifact pickle for a specific round."""
-    artifact_path = os.path.join(run_dir, f"round_{round_num}", "server_artifact.pkl")
-    with open(artifact_path, "rb") as f:
-        return pickle.load(f)
-
-
-def list_rounds(run_dir: str) -> List[int]:
-    """List available round numbers in a run directory."""
-    rounds = []
-    for item in os.listdir(run_dir):
-        if item.startswith("round_") and os.path.isdir(os.path.join(run_dir, item)):
-            round_num = int(item.split("_")[1])
-            rounds.append(round_num)
-    return sorted(rounds)
-
-
-def list_clients(run_dir: str, round_num: int) -> List[int]:
-    """List available client IDs for a specific round."""
-    clients_dir = os.path.join(run_dir, f"round_{round_num}", "clients")
-    clients = []
-    for item in os.listdir(clients_dir):
-        if item.startswith("client_") and item.endswith("_upload.pkl"):
-            client_id = int(item.split("_")[1])
-            clients.append(client_id)
-    return sorted(clients)
-
-
-def save_attack_results(run_dir: str, results: Dict[str, Any], attack_name: str) -> None:
-    """Save attack results to the run directory."""
-    results_dir = os.path.join(run_dir, "attacks")
-    os.makedirs(results_dir, exist_ok=True)
-    results_path = os.path.join(results_dir, f"{attack_name}_results.pkl")
-    with open(results_path, "wb") as f:
-        pickle.dump(results, f)
-
-
-def load_attack_results(run_dir: str, attack_name: str) -> Optional[Dict[str, Any]]:
-    """Load attack results from the run directory."""
-    results_path = os.path.join(run_dir, "attacks", f"{attack_name}_results.pkl")
-    if os.path.exists(results_path):
-        with open(results_path, "rb") as f:
-            return pickle.load(f)
-    return None
