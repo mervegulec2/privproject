@@ -12,6 +12,7 @@ from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, di
 from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed, compute_class_weights
 from src.aggregation import PrototypeStrategy
+from src.security.manager import SecurityManager, create_security_manager
 from src.eval.test_sets import (
     create_local_proportional_indices,
     create_local_aware_indices
@@ -37,7 +38,7 @@ def _select_device() -> str:
 
 # 1. Define the local client (no Ray/Flower dependency required)
 class LocalPrototypeClient:
-    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split, cfg: TrainConfig):
+    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split, cfg: TrainConfig, security_manager: SecurityManager = None):
         self.cid = cid
         self.train_ds = train_ds
         self.test_sets = test_sets
@@ -47,6 +48,7 @@ class LocalPrototypeClient:
             # Keep it deterministic for quick smoke tests
             self.split_indices = self.split_indices[:max_samples]
         self.cfg = cfg
+        self.security_manager = security_manager
         
         # Persistent local model
         self.model = ResNet18Cifar(num_classes=10).to(cfg.device)
@@ -68,6 +70,10 @@ class LocalPrototypeClient:
 
         local_protos, local_counts = compute_prototypes(self.model, train_loader, self.device)
         
+        # Apply Defenses (Modular Hook)
+        if self.security_manager:
+            local_protos = self.security_manager.apply_defenses(local_protos, local_counts)
+
         # Evaluate on all provided test sets
         accuracies = {}
         for name, subset in self.test_sets.items():
@@ -83,7 +89,7 @@ class LocalPrototypeClient:
 class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object):  # type: ignore[misc]
     """Prototype-only Flower client: shares prototypes, keeps all weights local."""
 
-    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split_indices: np.ndarray, cfg: TrainConfig):
+    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split_indices: np.ndarray, cfg: TrainConfig, security_manager: SecurityManager = None):
         self.cid = cid
         self.train_ds = train_ds
         self.test_sets = test_sets
@@ -92,6 +98,7 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
         if max_samples > 0 and len(self.split_indices) > max_samples:
             self.split_indices = self.split_indices[:max_samples]
         self.cfg = cfg
+        self.security_manager = security_manager
 
         self.model = ResNet18Cifar(num_classes=10).to(cfg.device)
         self.device = cfg.device
@@ -128,6 +135,10 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
         torch.save(self.model.state_dict(), self.model_path)
 
         local_protos, local_counts = compute_prototypes(self.model, train_loader, self.device)
+
+        # Apply Defenses (Modular Hook)
+        if self.security_manager:
+            local_protos = self.security_manager.apply_defenses(local_protos, local_counts)
 
         # Evaluate on all provided test sets
         accuracies = {}
@@ -228,7 +239,14 @@ def main():
     epochs = int(os.environ.get("EPOCHS", "5"))
     train_backbone = os.environ.get("TRAIN_BACKBONE", "1") != "0"
     train_head = os.environ.get("TRAIN_HEAD", "1") != "0"
-    cfg_train = TrainConfig(epochs=epochs, device=device, train_backbone=train_backbone, train_head=train_head)
+    # 2. Security Setup (Modular & Configurable)
+    security_cfg = {
+        "enable_logging": os.environ.get("SECURITY_LOGGING", "1") == "1",
+        "snapshot_dir": os.environ.get("SNAPSHOT_DIR", "outputs/security/snapshots"),
+        "defenses": [], # Placeholders for future modules
+        "attacks": []
+    }
+    security_manager = create_security_manager(security_cfg)
 
     use_flower = True  # Changed from os.environ.get("USE_FLOWER", "0") == "1"
     
@@ -255,7 +273,7 @@ def main():
                 "local_proportional": Subset(test_ds, lp_indices),
                 "local": Subset(test_ds, la_indices)
             }
-            return FlowerPrototypeClient(cid_int, train_ds, test_sets, split[cid_int], cfg_train).to_client()
+            return FlowerPrototypeClient(cid_int, train_ds, test_sets, split[cid_int], cfg_train, security_manager).to_client()
             
         strategy = PrototypeStrategy(
             fraction_fit=1.0,
@@ -263,7 +281,8 @@ def main():
             min_fit_clients=num_clients,
             min_evaluate_clients=0,
             min_available_clients=num_clients,
-            num_classes=10
+            num_classes=10,
+            security_manager=security_manager
         )
         
         # Determine client resources for Ray
@@ -294,7 +313,7 @@ def main():
             "local_proportional": Subset(test_ds, lp_indices),
             "local": Subset(test_ds, la_indices)
         }
-        clients.append(LocalPrototypeClient(cid, train_ds, client_test_sets, split, cfg_train))
+        clients.append(LocalPrototypeClient(cid, train_ds, client_test_sets, split, cfg_train, security_manager))
 
     # Local prototype-FL loop (no Ray needed)
     global_prototypes: Dict[int, np.ndarray] = {}
@@ -310,6 +329,7 @@ def main():
     for r in round_iter:
         round_proto_dicts = []
         round_count_dicts = []
+        client_snapshots = []  # Added initialization
         round_metrics = {
             "global": [],
             "local_proportional": [],
@@ -323,11 +343,24 @@ def main():
             out = client.fit(global_prototypes)
             round_proto_dicts.append(out["protos"])
             round_count_dicts.append(out["counts"])
+            
+            # Prepare data for Curious Server Snapshot
+            client_snapshots.append({
+                "cid": client.cid,
+                "protos": out["protos"],
+                "counts": out["counts"]
+            })
+
             for name, acc in out["accuracies"].items():
                 round_metrics[name].append(acc)
             
             if progress and hasattr(client_iter, "set_postfix_str"):
                 client_iter.set_postfix_str(f"local_acc={out['accuracies']['local']:.3f}")
+
+        # Curious Server Hook: Log Snapshot and Run Attacks
+        # For simplicity in local loop, we pick one client's backbone or a global model if available
+        # In FedProto, the server knows the architecture and initialization.
+        security_manager.log_and_attack(r, clients[0].model, client_snapshots)
 
         global_prototypes = aggregate_prototypes(round_proto_dicts, round_count_dicts, num_classes=10)
         

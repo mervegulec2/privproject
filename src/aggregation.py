@@ -11,9 +11,10 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
     - Ignores model weights (no weight aggregation).
     - Aggregates class-wise prototypes collected from clients.
     """
-    def __init__(self, num_classes: int = 10, **kwargs):
+    def __init__(self, num_classes: int = 10, security_manager=None, **kwargs):
         super().__init__(**kwargs)
         self.num_classes = num_classes
+        self.security_manager = security_manager
         self.global_prototypes: Dict[int, np.ndarray] = {}
 
     def aggregate_fit(
@@ -34,14 +35,29 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         # 1. Collect prototypes and counts from all clients
         client_protos_list = []
         client_counts_list = []
+        client_snapshots = []
         for _, fit_res in results:
             # We will send prototypes and counts as serialized bytes in metrics
             protos, counts = self._unpack_prototypes(fit_res.metrics)
             client_protos_list.append(protos)
             client_counts_list.append(counts)
+            
+            client_snapshots.append({
+                "cid": fit_res.metrics.get("cid", "?"),
+                "protos": protos,
+                "counts": counts
+            })
 
         # 2. Aggregate prototypes using weighted average (Eq 6)
         self.global_prototypes = self._aggregate_protos(client_protos_list, client_counts_list)
+        
+        # Curious Server Hook: Log Snapshot and Run Attacks
+        if self.security_manager:
+            # Note: In Flower simulation, we don't have direct access to client models easily at server.
+            # But the server knows the architecture and initialization.
+            # For now we skip model-state here or provide a way to pass the architecture.
+            # In real FL, the backbone would be the one being shared or known.
+            self.security_manager.log_and_attack(server_round, None, client_snapshots)
         
         # 3. Report detailed accuracy across clients
         accs_global = []
