@@ -73,8 +73,7 @@ def security_factory(config: Dict[str, Any]) -> SecurityManager:
         attacks.append(PrototypeReconstructionAttack(iterations=500, lr=1.0))
 
     if "cpa" in active_attack_names:
-        # User requested to NOT change class_inference folder path
-        from src.security.attacks.class_inference.trivial_cpa import TrivialClassPresenceAttack
+        from src.security.attacks.trivial_cpa import TrivialClassPresenceAttack
         attacks.append(TrivialClassPresenceAttack(num_classes=int(config.get("num_classes", 10))))
 
     if "mia" in active_attack_names:
