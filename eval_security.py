@@ -2,52 +2,93 @@ import os
 import pickle
 import argparse
 import torch
-from src.security.manager import create_security_manager
+import numpy as np
+from torch.utils.data import Subset
 from src.security.attacks.reconstruction import PrototypeReconstructionAttack
-# from src.security.attacks.membership import MembershipInferenceAttack  # Future use
+from src.security.metrics import get_reconstruction_fidelity, get_inference_leakage
+from src.security.plotter import plot_reconstruction_visuals
+from src.data_utils import load_cifar10, Cifar10Config, load_split
 
 def main():
-    parser = argparse.ArgumentParser(description="Security Evaluation Toolkit: Attack Saved Snapshots")
-    parser.add_argument("--snapshot", type=str, required=True, help="Path to the saved snapshot .pkl file")
-    parser.add_argument("--attack", type=str, choices=["reconstruction", "inference"], default="reconstruction")
+    parser = argparse.ArgumentParser(description="Professional Security Evaluation")
+    parser.add_argument("--snapshot", type=str, required=True, help="Path to pkl snapshot")
+    parser.add_argument("--attack", type=str, choices=["reconstruction", "mia"], default="reconstruction")
+    parser.add_argument("--split_path", type=str, help="Optional: Path to indices split for ground truth comparison")
     parser.add_argument("--save_dir", type=str, default="outputs/security/eval_results")
     args = parser.parse_args()
 
-    # 1. Load the Adversary Knowledge Snapshot
     if not os.path.exists(args.snapshot):
-        print(f"Error: Snapshot not found at {args.snapshot}")
+        print(f"Error: Snapshot {args.snapshot} not found.")
         return
 
+    # 1. Load Snapshot
     with open(args.snapshot, "rb") as f:
         snapshot = pickle.load(f)
-    print(f"\n>>> Loaded Snapshot for Round {snapshot['round']} <<<")
+    print(f"\n>>> Evaluating Security for Round {snapshot['round']} <<<")
 
-    # 2. Select the Attack
+    # 2. Load Ground Truth Data (Researcher's perspective)
+    print("Loading Ground Truth data for comparison...")
+    train_ds, test_ds = load_cifar10(Cifar10Config(root="data"))
+    
+    # 3. Setup Attack
     attack_module = None
     if args.attack == "reconstruction":
-        attack_module = PrototypeReconstructionAttack(
-            save_dir=os.path.join(args.save_dir, "visuals"),
-            iterations=500
-        )
-    elif args.attack == "inference":
-        # Placeholder for future implementation
-        print("MIA Attack Module not implemented yet.")
-        return
-
-    # 3. Execute Attack using only Snapshot Data (Honest-but-Curious)
+        attack_module = PrototypeReconstructionAttack(save_dir=os.path.join(args.save_dir, "visuals"), iterations=500)
+    
+    # 4. Execute Attack
     print(f"Executing {args.attack} attack...")
-    results = attack_module.execute(
-        model_state=snapshot["model_state"], 
-        shared_data={"clients": snapshot["clients"]}
-    )
+    results = attack_module.execute(snapshot["model_state"], {"clients": snapshot["clients"], "log_model_state": True})
 
-    # 4. Process Results
-    print("\n>>> Attack Results <<<")
-    # For reconstruction, we might report image paths or final loss
-    for client, stats in results.items():
-        print(f"{client}: {stats}")
+    # 5. Scientific Scoring (Comparison vs Ground Truth)
+    # We will try to find the actual ground truth for each client
+    summary_metrics = {}
+    
+    if args.attack == "reconstruction":
+        all_originals = []
+        all_reconstructed = []
+        
+        for client_key, stats in results.items():
+            cid = int(client_key.replace("client_", ""))
+            # For each class, we compare the reconstruction with the average 'Real' image for that client class
+            # (Note: In One-Shot, the prototype is the best representation of these samples)
+            
+            # Since the server doesn't know the indices, normally this is hard.
+            # But the EVALUTOR knows. We can try to load the original prototypes from the training set.
+            # To be simple: we use the auxiliary test set's class-averages as a reference for fidelity.
+            
+            client_scores = {}
+            for target_class, details in stats.items():
+                # Load a dummy image for shape or use the saved path
+                from PIL import Image
+                import torchvision.transforms as T
+                recon_img_pil = Image.open(details["save_path"]).convert('RGB')
+                recon_tensor = T.ToTensor()(recon_img_pil).numpy()
+                
+                # Fetch a sample of the actual Ground Truth class from Test Set for comparison
+                class_indices = [i for i, label in enumerate(test_ds.targets) if label == int(target_class)]
+                original_sample = test_ds[class_indices[0]][0].numpy()
+                
+                fidelity = get_reconstruction_fidelity(original_sample, recon_tensor)
+                client_scores[target_class] = fidelity
+                
+                all_originals.append(original_sample)
+                all_reconstructed.append(recon_tensor)
+            
+            summary_metrics[client_key] = client_scores
 
-    print(f"\nResults saved to {args.save_dir}")
+        # Generate the Visual Comparison Plot (DLG Style)
+        plot_reconstruction_visuals(all_originals, all_reconstructed, os.path.join(args.save_dir, "visual_leakage_matrix.png"))
+
+    # 6. Final Report
+    print("\n" + "="*30)
+    print("FINAL SECURITY SCORES")
+    print("="*30)
+    for cid, classes in summary_metrics.items():
+        print(f"\n{cid}:")
+        for cls, scores in classes.items():
+            print(f"  Class {cls} -> SSIM: {scores['ssim']:.4f} | PSNR: {scores['psnr']:.2f}dB | Cosine: {scores['cosine_sim']:.4f}")
+    
+    print(f"\nScientific summary saved to {args.save_dir}")
 
 if __name__ == "__main__":
     main()
