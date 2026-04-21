@@ -1,4 +1,11 @@
-/venv/
+/.venv/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
+env/
+/.idea//venv/
 __pycache__/
 *.pyc
 .DS_Store
