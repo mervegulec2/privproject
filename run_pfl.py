@@ -1,14 +1,19 @@
+import argparse
 import os
-import time
-import multiprocessing as mp
+import shutil
 import torch
-import csv
 import numpy as np
 import pickle
 from torch.utils.data import DataLoader, Subset
 from typing import Dict
-from tqdm import tqdm
-from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, dirichlet_split_indices, load_split, get_seen_classes
+from src.data_utils import (
+    load_cifar10,
+    Cifar10Config,
+    DirichletSplitConfig,
+    dirichlet_split_indices,
+    load_split,
+    get_seen_classes,
+)
 from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed, compute_class_weights
 from src.aggregation import PrototypeStrategy
@@ -214,198 +219,249 @@ def aggregate_prototypes(client_proto_dicts: list[Dict[int, np.ndarray]], client
             global_protos[c] = (weighted_sum / total).astype(np.float32)
     return global_protos
 
+def _parse_exp_mode() -> str:
+    p = argparse.ArgumentParser(
+        description="Three fixed experiment commands: epochs (sweep), augment, swa.",
+    )
+    p.add_argument(
+        "--exp-mode",
+        required=True,
+        choices=("epochs", "augment", "swa"),
+        help="epochs: sweep EPOCH_SWEEP (default 3,5,10) — tek komutta hepsi | "
+        "augment: RandAugment + Mixup; yerel epoch=EPOCHS (default 5) | "
+        "swa: SWA; yerel epoch=EPOCHS (default 5)",
+    )
+    args, _unknown = p.parse_known_args()
+    return args.exp_mode
+
+
+def _parse_epoch_sweep() -> list[int]:
+    raw = os.environ.get("EPOCH_SWEEP", "3,5,10")
+    out = [int(x.strip()) for x in raw.split(",") if x.strip()]
+    if not out:
+        raise ValueError("EPOCH_SWEEP produced no values; use e.g. EPOCH_SWEEP=3,5,10")
+    return out
+
+
+def _fixed_local_epochs() -> int:
+    """Default local epochs for augment / swa single runs (not the sweep)."""
+    return int(os.environ.get("EPOCHS", "5"))
+
+
+def _resolve_training_knobs(exp_mode: str) -> tuple[str, float, bool, int]:
+    """Returns (train_transform, mixup_alpha, swa_enabled, swa_last_epochs)."""
+    swa_last = int(os.environ.get("SWA_LAST_EPOCHS", "2"))
+    if exp_mode == "epochs":
+        return "default", 0.0, False, swa_last
+    if exp_mode == "augment":
+        mix = float(os.environ.get("MIXUP_ALPHA", "0.2"))
+        return "randaugment", mix, False, swa_last
+    if exp_mode == "swa":
+        return "default", 0.0, True, swa_last
+    raise ValueError(f"Unknown exp_mode: {exp_mode}")
+
+
+def _reset_ray_if_needed() -> None:
+    try:
+        import ray  # type: ignore
+
+        if ray.is_initialized():
+            ray.shutdown()
+    except Exception:
+        pass
+
+
+def _clear_client_model_checkpoints() -> None:
+    d = os.path.join("outputs", "client_models")
+    if os.path.isdir(d):
+        shutil.rmtree(d)
+    os.makedirs(d, exist_ok=True)
+
+
+def run_flower_experiment(
+    *,
+    exp_mode: str,
+    epochs: int,
+    train_transform: str,
+    mixup_alpha: float,
+    swa_enabled: bool,
+    swa_last_epochs: int,
+    num_clients: int,
+    num_rounds: int,
+    alpha: float,
+    seed: int,
+    device: str,
+    train_ds,
+    test_ds,
+    split,
+    metrics_csv_path: str,
+    plot_path: str,
+) -> None:
+    """Single Flower Ray simulation with metrics/plots written to the given paths."""
+    train_backbone = os.environ.get("TRAIN_BACKBONE", "1") != "0"
+    train_head = os.environ.get("TRAIN_HEAD", "1") != "0"
+
+    cfg_train = TrainConfig(
+        epochs=epochs,
+        device=device,
+        train_backbone=train_backbone,
+        train_head=train_head,
+        mixup_alpha=mixup_alpha,
+        swa_enabled=swa_enabled,
+        swa_last_epochs=swa_last_epochs,
+    )
+
+    security_cfg = {
+        "enable_logging": os.environ.get("SECURITY_LOGGING", "1") == "1",
+        "snapshot_dir": os.environ.get("SNAPSHOT_DIR", "outputs/security/snapshots"),
+        "defenses": [],
+        "attacks": [],
+    }
+    security_manager = create_security_manager(security_cfg)
+
+    if fl is None:
+        raise RuntimeError("flwr is required. Install flwr in the active venv.")
+
+    print(
+        f"\n>>> Flower Simulation | exp_mode={exp_mode} | train_tf={train_transform} "
+        f"mixup={mixup_alpha} swa={swa_enabled} (last_epochs={swa_last_epochs}) | "
+        f"clients={num_clients} rounds={num_rounds} local_epochs={epochs} "
+        f"LD={os.environ.get('LD', os.environ.get('LAMBDA_P', '0.1'))} device={cfg_train.device} | "
+        f"metrics_csv={metrics_csv_path} <<<\n",
+        flush=True,
+    )
+
+    def client_fn(cid: str) -> fl.client.Client:
+        cid_int = int(cid)
+        seen_classes = get_seen_classes(train_ds, split[cid_int])
+
+        lp_indices = create_local_proportional_indices(
+            test_ds, train_ds, split[cid_int], total_test_samples=1000, seed=seed
+        )
+        la_indices = create_local_aware_indices(test_ds, seen_classes)
+
+        test_sets = {
+            "global": test_ds,
+            "local_proportional": Subset(test_ds, lp_indices),
+            "local": Subset(test_ds, la_indices),
+        }
+        return FlowerPrototypeClient(
+            cid_int, train_ds, test_sets, split[cid_int], cfg_train, security_manager
+        ).to_client()
+
+    strategy = PrototypeStrategy(
+        fraction_fit=1.0,
+        fraction_evaluate=0.0,
+        min_fit_clients=num_clients,
+        min_evaluate_clients=0,
+        min_available_clients=num_clients,
+        num_classes=10,
+        security_manager=security_manager,
+        metrics_csv_path=metrics_csv_path,
+    )
+
+    client_resources = {"num_cpus": 1, "num_gpus": 0.0}
+    if cfg_train.device and "cuda" in str(cfg_train.device):
+        client_resources["num_gpus"] = float(os.environ.get("RAY_NUM_GPUS", "0.2"))
+
+    fl.simulation.start_simulation(
+        client_fn=client_fn,
+        num_clients=num_clients,
+        config=fl.server.ServerConfig(num_rounds=num_rounds),
+        strategy=strategy,
+        client_resources=client_resources,
+    )
+
+    plot_accuracy_curves(metrics_csv_path, save_path=plot_path)
+
+
 # 2. Simulation Orchestrator
 def main():
-    # Parameters
+    exp_mode = _parse_exp_mode()
+    train_transform, mixup_alpha, swa_enabled, swa_last_epochs = _resolve_training_knobs(exp_mode)
+
     num_clients = int(os.environ.get("NUM_CLIENTS", "10"))
     num_rounds = int(os.environ.get("NUM_ROUNDS", "2"))
     alpha = float(os.environ.get("ALPHA", "0.1"))
     seed = int(os.environ.get("SEED", "42"))
     device = _select_device()
-    
+
     set_seed(seed)
-    train_ds, test_ds = load_cifar10(Cifar10Config(root="data"))
-    
-    # Load Split
+    train_ds, test_ds = load_cifar10(Cifar10Config(root="data", train_transform=train_transform))
+
     split_path = f"outputs/splits/cifar10_dirichlet_a{alpha}_s{seed}_c{num_clients}.npy"
     if not os.path.exists(split_path):
-        # Fallback if not generated
         cfg_s = DirichletSplitConfig(num_clients=num_clients, alpha=alpha, seed=seed)
         split = dirichlet_split_indices(train_ds, cfg_s)
     else:
         split = load_split(split_path)
 
-    # FedProto-style local training: clients keep their full model local,
-    # and only share class-wise prototypes. For stable prototypes, we train the backbone too.
-    epochs = int(os.environ.get("EPOCHS", "5"))
-    train_backbone = os.environ.get("TRAIN_BACKBONE", "1") != "0"
-    train_head = os.environ.get("TRAIN_HEAD", "1") != "0"
-    
-    cfg_train = TrainConfig(epochs=epochs, device=device, train_backbone=train_backbone, train_head=train_head)
-
-    # 2. Security Setup (Modular & Configurable)
-    security_cfg = {
-        "enable_logging": os.environ.get("SECURITY_LOGGING", "1") == "1",
-        "snapshot_dir": os.environ.get("SNAPSHOT_DIR", "outputs/security/snapshots"),
-        "defenses": [], # Placeholders for future modules
-        "attacks": []
-    }
-    security_manager = create_security_manager(security_cfg)
-
-    use_flower = True  # Changed from os.environ.get("USE_FLOWER", "0") == "1"
-    
-    if use_flower:
-        if fl is None:
-            raise RuntimeError("USE_FLOWER=1 but flwr import failed. Install flwr in the active venv.")
-
-        # Note: server_address is not needed for fl.simulation.start_simulation
+    if exp_mode == "epochs":
+        sweep = _parse_epoch_sweep()
+        base = os.path.join("outputs", "metrics", "experiments", "epochs")
+        os.makedirs(base, exist_ok=True)
         print(
-            f"\n>>> Flower Simulation (Virtual Client Engine) | clients={num_clients} rounds={num_rounds} epochs={epochs} LD={os.environ.get('LD', os.environ.get('LAMBDA_P', '0.1'))} device={cfg_train.device} <<<",
+            f"\n>>> Epoch sweep: {sweep} (set EPOCH_SWEEP to change). "
+            f"Outputs under {base}/\n",
             flush=True,
         )
-
-        def client_fn(cid: str) -> fl.client.Client:
-            cid_int = int(cid)
-            seen_classes = get_seen_classes(train_ds, split[cid_int])
-            
-            lp_indices = create_local_proportional_indices(test_ds, train_ds, split[cid_int], total_test_samples=1000, seed=seed)
-            la_indices = create_local_aware_indices(test_ds, seen_classes)
-            
-            test_sets = {
-                "global": test_ds,
-                "local_proportional": Subset(test_ds, lp_indices),
-                "local": Subset(test_ds, la_indices)
-            }
-            return FlowerPrototypeClient(cid_int, train_ds, test_sets, split[cid_int], cfg_train, security_manager).to_client()
-            
-        strategy = PrototypeStrategy(
-            fraction_fit=1.0,
-            fraction_evaluate=0.0,
-            min_fit_clients=num_clients,
-            min_evaluate_clients=0,
-            min_available_clients=num_clients,
-            num_classes=10,
-            security_manager=security_manager
-        )
-        
-        # Determine client resources for Ray
-        client_resources = {"num_cpus": 1, "num_gpus": 0.0}
-        if cfg_train.device and "cuda" in str(cfg_train.device):
-            # Assign fractional GPU so multiple virtual clients can run concurrently on same GPU
-            client_resources["num_gpus"] = float(os.environ.get("RAY_NUM_GPUS", "0.2"))
-
-        # Start Ray-based Flower Simulation
-        hist = fl.simulation.start_simulation(
-            client_fn=client_fn,
-            num_clients=num_clients,
-            config=fl.server.ServerConfig(num_rounds=num_rounds),
-            strategy=strategy,
-            client_resources=client_resources
-        )
-        
-        # Plotting for Flower Mode
-        # Extract metrics from the 'hist' object if the strategy reported them
-        # Note: Strategy already saved to CSV, but we can also plot from memory here
-        if "avg_accuracy" in hist.metrics_centralized:
-             # If we have centralized metrics, we can plot them. 
-             # However, since we already saved to simulation_results.csv, 
-             # the most reliable way is for the plotter to just refresh from that CSV.
-             pass 
-
-        # For simplicity and consistency, we can call the plotter here as well
-        # if we track history. For now, since aggregate_fit saves to CSV,
-        # we can just make sure the plotter is called.
-        # Plotting for Flower Mode: Refresh from the CSV we just saved
-        plot_accuracy_curves("outputs/metrics/simulation_results.csv")
+        for ep in sweep:
+            _reset_ray_if_needed()
+            _clear_client_model_checkpoints()
+            csv_p = os.path.join(base, f"ep_{ep}.csv")
+            plot_p = os.path.join(base, f"accuracy_ep_{ep}.png")
+            run_flower_experiment(
+                exp_mode=exp_mode,
+                epochs=ep,
+                train_transform=train_transform,
+                mixup_alpha=mixup_alpha,
+                swa_enabled=swa_enabled,
+                swa_last_epochs=swa_last_epochs,
+                num_clients=num_clients,
+                num_rounds=num_rounds,
+                alpha=alpha,
+                seed=seed,
+                device=device,
+                train_ds=train_ds,
+                test_ds=test_ds,
+                split=split,
+                metrics_csv_path=csv_p,
+                plot_path=plot_p,
+            )
         return
 
-    clients = []
-    for cid in range(num_clients):
-        seen_classes = get_seen_classes(train_ds, split[cid])
-        
-        lp_indices = create_local_proportional_indices(test_ds, train_ds, split[cid], total_test_samples=1000, seed=seed)
-        la_indices = create_local_aware_indices(test_ds, seen_classes)
-        
-        client_test_sets = {
-            "global": test_ds,
-            "local_proportional": Subset(test_ds, lp_indices),
-            "local": Subset(test_ds, la_indices)
-        }
-        clients.append(LocalPrototypeClient(cid, train_ds, client_test_sets, split, cfg_train, security_manager))
-
-    # Local prototype-FL loop (no Ray needed)
-    global_prototypes: Dict[int, np.ndarray] = {}
-    history = {"global": [], "local_proportional": [], "local": []}
+    fixed_epochs = _fixed_local_epochs()
+    sub = "augment" if exp_mode == "augment" else "swa"
+    base = os.path.join("outputs", "metrics", "experiments", sub)
+    os.makedirs(base, exist_ok=True)
+    _reset_ray_if_needed()
+    _clear_client_model_checkpoints()
+    csv_p = os.path.join(base, "simulation_results.csv")
+    plot_p = os.path.join(base, "accuracy_curve.png")
     print(
-        f"\n>>> Starting Local Prototype-FL Simulation (Alpha={alpha}, Rounds={num_rounds}, Clients={num_clients}, Epochs={epochs}, LD={os.environ.get('LD', os.environ.get('LAMBDA_P', '0.1'))}) <<<",
+        f"\n>>> Single run: local_epochs={fixed_epochs} (set EPOCHS to change). "
+        f"Outputs under {base}/\n",
         flush=True,
     )
-    progress = os.environ.get("PROGRESS", "1") != "0"
-    round_iter = range(1, num_rounds + 1)
-    if progress:
-        round_iter = tqdm(round_iter, desc="Rounds")
+    run_flower_experiment(
+        exp_mode=exp_mode,
+        epochs=fixed_epochs,
+        train_transform=train_transform,
+        mixup_alpha=mixup_alpha,
+        swa_enabled=swa_enabled,
+        swa_last_epochs=swa_last_epochs,
+        num_clients=num_clients,
+        num_rounds=num_rounds,
+        alpha=alpha,
+        seed=seed,
+        device=device,
+        train_ds=train_ds,
+        test_ds=test_ds,
+        split=split,
+        metrics_csv_path=csv_p,
+        plot_path=plot_p,
+    )
 
-    for r in round_iter:
-        round_proto_dicts = []
-        round_count_dicts = []
-        client_snapshots = []  # Added initialization
-        round_metrics = {
-            "global": [],
-            "local_proportional": [],
-            "local": []
-        }
-        
-        client_iter = clients
-        if progress:
-            client_iter = tqdm(clients, desc=f"Round {r}/{num_rounds} clients", leave=False)
-        for client in client_iter:
-            out = client.fit(global_prototypes)
-            round_proto_dicts.append(out["protos"])
-            round_count_dicts.append(out["counts"])
-            
-            # Prepare data for Curious Server Snapshot
-            client_snapshots.append({
-                "cid": client.cid,
-                "protos": out["protos"],
-                "counts": out["counts"]
-            })
-
-            for name, acc in out["accuracies"].items():
-                round_metrics[name].append(acc)
-            
-            if progress and hasattr(client_iter, "set_postfix_str"):
-                client_iter.set_postfix_str(f"local_acc={out['accuracies']['local']:.3f}")
-
-        # Curious Server Hook: Log Snapshot and Run Attacks
-        # For simplicity in local loop, we pick one client's backbone or a global model if available
-        # In FedProto, the server knows the architecture and initialization.
-        security_manager.log_and_attack(r, clients[0].model, client_snapshots)
-
-        global_prototypes = aggregate_prototypes(round_proto_dicts, round_count_dicts, num_classes=10)
-        
-        avgs = {name: float(np.mean(accs)) if accs else 0.0 for name, accs in round_metrics.items()}
-        
-        # 1. Detailed Terminal Output
-        print(f"[Round {r}] Avg Accs -> Global: {avgs['global']:.4f} | Local-Prop: {avgs['local_proportional']:.4f} | Local: {avgs['local']:.4f}", flush=True)
-
-        # 2. Save to CSV Output File
-        log_dir = "outputs/metrics"
-        os.makedirs(log_dir, exist_ok=True)
-        csv_path = os.path.join(log_dir, "simulation_results.csv")
-        file_exists = os.path.isfile(csv_path)
-        with open(csv_path, "a", newline="") as f:
-            writer = csv.writer(f)
-            if not file_exists:
-                headers = ["round", "avg_global", "avg_local_proportional", "avg_local"]
-                writer.writerow(headers)
-            writer.writerow([r, avgs["global"], avgs["local_proportional"], avgs["local"]])
-
-        # Update History for plotting
-        for k in history:
-            history[k].append(avgs[k] * 100) # Convert to percentage for plot
-
-    # 3. Final Plotting (Modular Tool) - Refresh from the CSV
-    plot_accuracy_curves("outputs/metrics/simulation_results.csv")
 
 if __name__ == "__main__":
     main()

@@ -2,7 +2,7 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-from typing import Dict, List
+from typing import Dict, List, Union
 
 def plot_privacy_utility_tradeoff(
     noise_levels: List[float], 
@@ -28,7 +28,7 @@ def plot_privacy_utility_tradeoff(
 
     # --- Utility Plot (Left Axis) ---
     color = 'tab:blue'
-    ax1.set_xlabel('Defense Strength (Noise Scale $\sigma$)', fontsize=12, fontweight='bold')
+    ax1.set_xlabel(r"Defense Strength (Noise Scale $\sigma$)", fontsize=12, fontweight="bold")
     ax1.set_ylabel('Utility: Accuracy (%)', color=color, fontsize=12, fontweight='bold')
     ax1.plot(x, accuracies, marker='o', color=color, linewidth=2, markersize=8, label='Accuracy')
     ax1.tick_params(axis='y', labelcolor=color)

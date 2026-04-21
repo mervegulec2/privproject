@@ -11,11 +11,18 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
     - Ignores model weights (no weight aggregation).
     - Aggregates class-wise prototypes collected from clients.
     """
-    def __init__(self, num_classes: int = 10, security_manager=None, **kwargs):
+    def __init__(
+        self,
+        num_classes: int = 10,
+        security_manager=None,
+        metrics_csv_path: Optional[str] = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.num_classes = num_classes
         self.security_manager = security_manager
         self.global_prototypes: Dict[int, np.ndarray] = {}
+        self.metrics_csv_path = metrics_csv_path
 
     def aggregate_fit(
         self,
@@ -66,9 +73,10 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         accs_local_prop = [fit_res.metrics["acc_local_proportional"] for _, fit_res in results if "acc_local_proportional" in fit_res.metrics]
         accs_local = [fit_res.metrics["acc_local"] for _, fit_res in results if "acc_local" in fit_res.metrics]
         
-        log_dir = "outputs/metrics"
-        os.makedirs(log_dir, exist_ok=True)
-        csv_path = os.path.join(log_dir, "simulation_results.csv")
+        csv_path = self.metrics_csv_path or os.path.join("outputs", "metrics", "simulation_results.csv")
+        log_dir = os.path.dirname(csv_path)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
         
         avg_g = float(np.mean(accs_global)) if accs_global else 0.0
         avg_lp = float(np.mean(accs_local_prop)) if accs_local_prop else 0.0

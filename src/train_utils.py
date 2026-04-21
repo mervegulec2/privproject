@@ -4,6 +4,7 @@ import numpy as np
 from dataclasses import dataclass
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from torch.optim.swa_utils import update_bn
 
 @dataclass(frozen=True)
 class TrainConfig:
@@ -15,6 +16,22 @@ class TrainConfig:
     device: str = "cpu"
     train_backbone: bool = True
     train_head: bool = True
+    # mixup_alpha > 0 enables batch mixup (prototype term omitted on mixed batches)
+    mixup_alpha: float = 0.0
+    # Average last swa_last_epochs epoch weights into the final model (then optional BN refresh)
+    swa_enabled: bool = False
+    swa_last_epochs: int = 2
+
+
+def _mixup_data(x: torch.Tensor, y: torch.Tensor, alpha: float):
+    if alpha <= 0.0:
+        return None
+    lam = float(np.random.beta(alpha, alpha))
+    batch_size = x.size(0)
+    index = torch.randperm(batch_size, device=x.device)
+    mixed_x = lam * x + (1.0 - lam) * x[index]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
 
 
 def train_local_proto(
@@ -65,6 +82,9 @@ def train_local_proto(
             proto_table[c] = v.view(-1)
             proto_avail[c] = True
 
+    swa_begin = max(0, cfg.epochs - cfg.swa_last_epochs) if cfg.swa_enabled else cfg.epochs
+    swa_snapshots: list[dict] = []
+
     for ep in range(cfg.epochs):
         total_loss, total = 0.0, 0
         it = train_loader
@@ -73,47 +93,74 @@ def train_local_proto(
         for x, y in it:
             x, y = x.to(cfg.device), y.to(cfg.device)
             opt.zero_grad()
-            
+
+            mix = _mixup_data(x, y, cfg.mixup_alpha) if cfg.mixup_alpha > 0 else None
+            use_proto = proto_table is not None and mix is None
+
             with torch.cuda.amp.autocast(enabled=use_amp):
-                logits, emb = model(x)
-                if class_weights is not None:
-                    ce_loss = F.cross_entropy(logits, y, weight=class_weights)
+                if mix is not None:
+                    mixed_x, y_a, y_b, lam = mix
+                    logits, emb = model(mixed_x)
+                    ce_loss = lam * F.cross_entropy(logits, y_a) + (1.0 - lam) * F.cross_entropy(
+                        logits, y_b
+                    )
+                    proto_loss = torch.tensor(0.0, device=cfg.device)
                 else:
-                    ce_loss = F.cross_entropy(logits, y)
-                
-                # Prototype Alignment Loss (FedProto Algorithm 1):
-                # Compute local batch prototype per class, then distance to global prototype.
-                proto_loss = torch.tensor(0.0, device=cfg.device)
-                if proto_table is not None:
-                    unique_classes = torch.unique(y)
-                    valid_dists = []
-                    for c in unique_classes:
-                        c_idx = int(c.item())
-                        if c_idx < proto_table.size(0) and proto_avail[c_idx]:
-                            # Eq 3: Local batch prototype for class c
-                            batch_proto_c = emb[y == c].mean(dim=0)
-                            # Eq 8: Distance to global prototype
-                            dist = torch.sum((batch_proto_c - proto_table[c_idx]) ** 2)
-                            valid_dists.append(dist)
-                    
-                    if valid_dists:
-                        proto_loss = torch.stack(valid_dists).sum()
-                
+                    logits, emb = model(x)
+                    if class_weights is not None:
+                        ce_loss = F.cross_entropy(logits, y, weight=class_weights)
+                    else:
+                        ce_loss = F.cross_entropy(logits, y)
+
+                    proto_loss = torch.tensor(0.0, device=cfg.device)
+                    if use_proto:
+                        unique_classes = torch.unique(y)
+                        valid_dists = []
+                        for c in unique_classes:
+                            c_idx = int(c.item())
+                            if c_idx < proto_table.size(0) and proto_avail[c_idx]:
+                                batch_proto_c = emb[y == c].mean(dim=0)
+                                dist = torch.sum((batch_proto_c - proto_table[c_idx]) ** 2)
+                                valid_dists.append(dist)
+
+                        if valid_dists:
+                            proto_loss = torch.stack(valid_dists).sum()
+
                 loss = ce_loss + lambda_p * proto_loss
-            
+
             scaler.scale(loss).backward()
             scaler.step(opt)
             scaler.update()
-            
-            
-            total_loss += float(loss.item()) * x.size(0)
-            total += x.size(0)
-        
+
+            bs = x.size(0)
+            total_loss += float(loss.item()) * bs
+            total += bs
+
         epoch_loss = total_loss / total if total > 0 else 0
         if not progress:
-            # Simple log, easily readable in Ray and normal console
             print(f"[Client {cid}] Epoch {ep+1}/{cfg.epochs} - Loss: {epoch_loss:.4f}", flush=True)
-            
+
+        if cfg.swa_enabled and ep >= swa_begin:
+            swa_snapshots.append({k: v.detach().cpu().clone() for k, v in model.state_dict().items()})
+
+    if swa_snapshots:
+        avg_sd: dict[str, torch.Tensor] = {}
+        for k in swa_snapshots[0]:
+            t0 = swa_snapshots[0][k]
+            if t0.dtype in (torch.long, torch.int32, torch.bool):
+                avg_sd[k] = swa_snapshots[-1][k].clone().to(device=cfg.device)
+            else:
+                stacked = torch.stack([snap[k].float() for snap in swa_snapshots])
+                avg_sd[k] = stacked.mean(dim=0).to(device=cfg.device, dtype=t0.dtype)
+        model.load_state_dict(avg_sd)
+        model.train()
+        try:
+            update_bn(train_loader, model, device=torch.device(cfg.device))
+        except Exception:
+            model.eval()
+        else:
+            model.eval()
+
     return total_loss / total if total > 0 else 0
 
 @torch.no_grad()

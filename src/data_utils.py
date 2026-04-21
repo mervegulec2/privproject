@@ -9,24 +9,39 @@ from torchvision import datasets, transforms
 class Cifar10Config:
     root: str = "data"
     num_classes: int = 10
+    # "default": crop+flip; "randaugment": adds torchvision RandAugment before ToTensor
+    train_transform: str = "default"
 
-def get_cifar10_transforms():
+def get_cifar10_transforms(train_style: str = "default"):
     mean = (0.4914, 0.4822, 0.4465)
     std  = (0.2470, 0.2435, 0.2616)
-    train_tf = transforms.Compose([
+    train_steps = [
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std),
-    ])
-    test_tf = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std),
-    ])
+    ]
+    if train_style == "randaugment":
+        train_steps.append(transforms.RandAugment(num_ops=2, magnitude=9))
+    train_steps.extend(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std),
+        ]
+    )
+    train_tf = transforms.Compose(train_steps)
+    test_tf = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std),
+        ]
+    )
     return train_tf, test_tf
 
+def get_cifar10_transforms_legacy():
+    """Backward-compatible alias for default (crop + flip) training transforms."""
+    return get_cifar10_transforms("default")
+
 def load_cifar10(cfg: Cifar10Config):
-    train_tf, test_tf = get_cifar10_transforms()
+    train_tf, test_tf = get_cifar10_transforms(cfg.train_transform)
     train_ds = datasets.CIFAR10(root=cfg.root, train=True, download=True, transform=train_tf)
     test_ds  = datasets.CIFAR10(root=cfg.root, train=False, download=True, transform=test_tf)
     return train_ds, test_ds
