@@ -96,20 +96,35 @@ def plot_reconstruction_visuals(
     plt.close()
     print(f"[Plotting] Saved Visual Leakage plot to {save_path}")
 
-def plot_accuracy_curves(metrics_history: Dict[str, List[float]], save_path: str = "outputs/metrics/accuracy_curve.png"):
+def plot_accuracy_curves(data: Union[Dict[str, List[float]], str], save_path: str = "outputs/metrics/accuracy_curve.png"):
     """
     Plots the three accuracy metrics over rounds.
-    metrics_history should have keys: 'global', 'local_proportional', 'local'
+    'data' can be a metrics_history dict OR a path to the simulation_results.csv file.
     """
+    import pandas as pd
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     sns.set_theme(style="whitegrid")
     plt.figure(figsize=(10, 6))
 
-    rounds = range(1, len(metrics_history["global"]) + 1)
-    
-    plt.plot(rounds, metrics_history["global"], marker='o', label='Global Accuracy', linewidth=2)
-    plt.plot(rounds, metrics_history["local_proportional"], marker='s', label='Local Proportional', linewidth=2)
-    plt.plot(rounds, metrics_history["local"], marker='^', label='Local (Seen Classes)', linewidth=2)
+    if isinstance(data, str):
+        # Load from CSV
+        if not os.path.exists(data):
+            print(f"[Plotting] Error: CSV file {data} not found.")
+            return
+        df = pd.read_csv(data)
+        rounds = df["round"].values
+        # Multiply by 100 if the CSV values are in [0, 1] range (check first row)
+        scale = 100 if df["avg_global"].iloc[0] <= 1.0 else 1.0
+        
+        plt.plot(rounds, df["avg_global"] * scale, marker='o', label='Global Accuracy', linewidth=2)
+        plt.plot(rounds, df["avg_local_proportional"] * scale, marker='s', label='Local Proportional', linewidth=2)
+        plt.plot(rounds, df["avg_local"] * scale, marker='^', label='Local (Seen Classes)', linewidth=2)
+    else:
+        # Load from Dictionary
+        rounds = range(1, len(data["global"]) + 1)
+        plt.plot(rounds, data["global"], marker='o', label='Global Accuracy', linewidth=2)
+        plt.plot(rounds, data["local_proportional"], marker='s', label='Local Proportional', linewidth=2)
+        plt.plot(rounds, data["local"], marker='^', label='Local (Seen Classes)', linewidth=2)
 
     plt.title("Federated Learning Accuracy Curve", fontsize=14, fontweight='bold')
     plt.xlabel("Communication Round", fontsize=12)

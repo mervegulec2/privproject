@@ -258,8 +258,7 @@ def main():
         if fl is None:
             raise RuntimeError("USE_FLOWER=1 but flwr import failed. Install flwr in the active venv.")
 
-        server_address = os.environ.get("SERVER_ADDRESS", "127.0.0.1:8080")
-
+        # Note: server_address is not needed for fl.simulation.start_simulation
         print(
             f"\n>>> Flower Simulation (Virtual Client Engine) | clients={num_clients} rounds={num_rounds} epochs={epochs} LD={os.environ.get('LD', os.environ.get('LAMBDA_P', '0.1'))} device={cfg_train.device} <<<",
             flush=True,
@@ -296,13 +295,28 @@ def main():
             client_resources["num_gpus"] = float(os.environ.get("RAY_NUM_GPUS", "0.2"))
 
         # Start Ray-based Flower Simulation
-        fl.simulation.start_simulation(
+        hist = fl.simulation.start_simulation(
             client_fn=client_fn,
             num_clients=num_clients,
             config=fl.server.ServerConfig(num_rounds=num_rounds),
             strategy=strategy,
             client_resources=client_resources
         )
+        
+        # Plotting for Flower Mode
+        # Extract metrics from the 'hist' object if the strategy reported them
+        # Note: Strategy already saved to CSV, but we can also plot from memory here
+        if "avg_accuracy" in hist.metrics_centralized:
+             # If we have centralized metrics, we can plot them. 
+             # However, since we already saved to simulation_results.csv, 
+             # the most reliable way is for the plotter to just refresh from that CSV.
+             pass 
+
+        # For simplicity and consistency, we can call the plotter here as well
+        # if we track history. For now, since aggregate_fit saves to CSV,
+        # we can just make sure the plotter is called.
+        # Plotting for Flower Mode: Refresh from the CSV we just saved
+        plot_accuracy_curves("outputs/metrics/simulation_results.csv")
         return
 
     clients = []
@@ -390,8 +404,8 @@ def main():
         for k in history:
             history[k].append(avgs[k] * 100) # Convert to percentage for plot
 
-    # 3. Final Plotting (Modular Tool)
-    plot_accuracy_curves(history)
+    # 3. Final Plotting (Modular Tool) - Refresh from the CSV
+    plot_accuracy_curves("outputs/metrics/simulation_results.csv")
 
 if __name__ == "__main__":
     main()

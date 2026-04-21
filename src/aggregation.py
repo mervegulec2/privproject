@@ -59,48 +59,31 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
             # In real FL, the backbone would be the one being shared or known.
             self.security_manager.log_and_attack(server_round, None, client_snapshots)
         
-        # 3. Report detailed accuracy across clients
-        accs_global = []
-        accs_local_prop = []
-        accs_local = []
-        
-        # Prepare output text
+        # 3. Save Results (Harmonized with Local Loop)
         import os
+        import csv
+        accs_global = [fit_res.metrics["acc_global"] for _, fit_res in results if "acc_global" in fit_res.metrics]
+        accs_local_prop = [fit_res.metrics["acc_local_proportional"] for _, fit_res in results if "acc_local_proportional" in fit_res.metrics]
+        accs_local = [fit_res.metrics["acc_local"] for _, fit_res in results if "acc_local" in fit_res.metrics]
+        
         log_dir = "outputs/metrics"
         os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, "flower_results.txt")
+        csv_path = os.path.join(log_dir, "simulation_results.csv")
         
-        log_lines = []
-        log_lines.append(f"\n[Round {server_round}] Server Aggregated {len(results)} clients.")
+        avg_g = float(np.mean(accs_global)) if accs_global else 0.0
+        avg_lp = float(np.mean(accs_local_prop)) if accs_local_prop else 0.0
+        avg_l = float(np.mean(accs_local)) if accs_local else 0.0
         
-        for _, fit_res in results:
-            metrics = fit_res.metrics
-            cid = metrics.get("cid", "?")
-            msg = f"  - Client {cid}: "
-            
-            if "acc_global" in metrics:
-                accs_global.append(metrics["acc_global"])
-                msg += f"Global: {metrics['acc_global']:.4f} "
-            if "acc_local_proportional" in metrics:
-                accs_local_prop.append(metrics["acc_local_proportional"])
-                msg += f"Local-Prop: {metrics['acc_local_proportional']:.4f} "
-            if "acc_local" in metrics:
-                accs_local.append(metrics["acc_local"])
-                msg += f"Local: {metrics['acc_local']:.4f}"
-            log_lines.append(msg)
-            
-        avg_g = sum(accs_global) / len(accs_global) if accs_global else 0.0
-        avg_lp = sum(accs_local_prop) / len(accs_local_prop) if accs_local_prop else 0.0
-        avg_l = sum(accs_local) / len(accs_local) if accs_local else 0.0
-        
-        log_lines.append(f"| Avg Accs -> Global: {avg_g:.4f} | Local-Prop: {avg_lp:.4f} | Local: {avg_l:.4f}")
+        file_exists = os.path.isfile(csv_path)
+        with open(csv_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["round", "avg_global", "avg_local_proportional", "avg_local"])
+            writer.writerow([server_round, avg_g, avg_lp, avg_l])
 
-        log_str = "\n".join(log_lines)
-        print(log_str) # Keep it in terminal in case user looks
-        with open(log_file, "a") as f:
-            f.write(log_str + "\n")
+        print(f"| Round {server_round} | Avg Accs -> Global: {avg_g:.4f} | Local-Prop: {avg_lp:.4f} | Local: {avg_l:.4f}")
 
-        # Return empty parameters because we don't aggregate weights
+        # Return metrics for the Flower history object
         return ndarrays_to_parameters([]), {"avg_accuracy": avg_l}
 
     def configure_fit(

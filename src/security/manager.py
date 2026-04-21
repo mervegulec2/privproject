@@ -99,7 +99,7 @@ def create_security_manager(config: Dict[str, Any]) -> SecurityManager:
             lr=1.0
         ))
 
-    if "cpa_trivial" in active_attack_names:
+    if "cpa" in active_attack_names:
         from src.security.attacks.class_inference.trivial_cpa import TrivialClassPresenceAttack
         attacks.append(TrivialClassPresenceAttack(num_classes=int(config.get("num_classes", 10))))
 
@@ -107,7 +107,7 @@ def create_security_manager(config: Dict[str, Any]) -> SecurityManager:
         from src.security.attacks.membership.mia_feasibility import MIAFeasibilityAttack
         attacks.append(MIAFeasibilityAttack())
 
-    if "mia_proto" in active_attack_names:
+    if "mia" in active_attack_names:
         from src.security.attacks.membership.mia_proto_scoring import PrototypeMIAAttack
         attacks.append(
             PrototypeMIAAttack(
