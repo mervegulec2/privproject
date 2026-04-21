@@ -2,7 +2,7 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-from typing import Dict, List
+from typing import Dict, List, Union
 
 def plot_privacy_utility_tradeoff(
     noise_levels: List[float], 
@@ -71,6 +71,10 @@ def plot_reconstruction_visuals(
     Row 1: Ground Truth
     Row 2: Fully Leaked
     """
+    if not original_images or len(original_images) == 0:
+        print("[Plotting] Warning: No images provided for reconstruction plot. Skipping.")
+        return
+
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     n = min(len(original_images), 8) # Show max 8 images
     

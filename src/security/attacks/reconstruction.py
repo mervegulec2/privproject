@@ -60,21 +60,25 @@ class PrototypeReconstructionAttack(BaseAttack):
     def execute(self, model_state: Dict[str, Any], shared_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Executes the reconstruction attack on logged snapshots.
-        If no logs yet, this handles gracefully.
         """
-        if not model_state or "clients" not in shared_data:
-            return {"status": "skipped", "reason": "Missing state or data"}
+        if "clients" not in shared_data:
+            return {"status": "skipped", "reason": "Missing client data"}
             
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
         # 1. Setup Server's Copy of the Model (System Knowledge)
-        # We assume ResNet18Cifar based on the system knowledge.
         model = ResNet18Cifar(num_classes=10)
-        model.load_state_dict(model_state)
+        
+        if model_state is not None:
+            # print("[Attack] Using specific model_state from snapshot.")
+            model.load_state_dict(model_state)
+        else:
+            print("[Attack] Notice: No model_state in snapshot. Proceeding with Global Model Initialization.")
+
         # Apply DLG paper modifications (twice-differentiable requirement)
         _replace_activation(model)
         model.to(device)
-        model.eval() # Server uses the deterministic forward pass
+        model.eval() 
         
         results = {}
         

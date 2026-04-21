@@ -77,7 +77,10 @@ def main():
             summary_metrics[client_key] = client_scores
 
         # Generate the Visual Comparison Plot (DLG Style)
-        plot_reconstruction_visuals(all_originals, all_reconstructed, os.path.join(args.save_dir, "visual_leakage_matrix.png"))
+        if all_originals:
+            plot_reconstruction_visuals(all_originals, all_reconstructed, os.path.join(args.save_dir, "visual_leakage_matrix.png"))
+        else:
+            print("\n[Evaluation] No images were reconstructed. This usually happens if the model state was missing or the attack failed to converge.")
 
     # 6. Final Report
     print("\n" + "="*30)
