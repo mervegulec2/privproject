@@ -95,3 +95,30 @@ def plot_reconstruction_visuals(
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"[Plotting] Saved Visual Leakage plot to {save_path}")
+
+def plot_accuracy_curves(metrics_history: Dict[str, List[float]], save_path: str = "outputs/metrics/accuracy_curve.png"):
+    """
+    Plots the three accuracy metrics over rounds.
+    metrics_history should have keys: 'global', 'local_proportional', 'local'
+    """
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    sns.set_theme(style="whitegrid")
+    plt.figure(figsize=(10, 6))
+
+    rounds = range(1, len(metrics_history["global"]) + 1)
+    
+    plt.plot(rounds, metrics_history["global"], marker='o', label='Global Accuracy', linewidth=2)
+    plt.plot(rounds, metrics_history["local_proportional"], marker='s', label='Local Proportional', linewidth=2)
+    plt.plot(rounds, metrics_history["local"], marker='^', label='Local (Seen Classes)', linewidth=2)
+
+    plt.title("Federated Learning Accuracy Curve", fontsize=14, fontweight='bold')
+    plt.xlabel("Communication Round", fontsize=12)
+    plt.ylabel("Accuracy (%)", fontsize=12)
+    plt.xticks(rounds)
+    plt.ylim([0, 105])
+    plt.legend(loc='lower right', frameon=True, shadow=True)
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    print(f"[Plotting] Saved training curves to {save_path}")

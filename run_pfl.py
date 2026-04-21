@@ -13,6 +13,7 @@ from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed, compute_class_weights
 from src.aggregation import PrototypeStrategy
 from src.security.manager import SecurityManager, create_security_manager
+from src.security.plotter import plot_accuracy_curves
 from src.eval.test_sets import (
     create_local_proportional_indices,
     create_local_aware_indices
@@ -320,6 +321,7 @@ def main():
 
     # Local prototype-FL loop (no Ray needed)
     global_prototypes: Dict[int, np.ndarray] = {}
+    history = {"global": [], "local_proportional": [], "local": []}
     print(
         f"\n>>> Starting Local Prototype-FL Simulation (Alpha={alpha}, Rounds={num_rounds}, Clients={num_clients}, Epochs={epochs}, LD={os.environ.get('LD', os.environ.get('LAMBDA_P', '0.1'))}) <<<",
         flush=True,
@@ -383,6 +385,13 @@ def main():
                 headers = ["round", "avg_global", "avg_local_proportional", "avg_local"]
                 writer.writerow(headers)
             writer.writerow([r, avgs["global"], avgs["local_proportional"], avgs["local"]])
+
+        # Update History for plotting
+        for k in history:
+            history[k].append(avgs[k] * 100) # Convert to percentage for plot
+
+    # 3. Final Plotting (Modular Tool)
+    plot_accuracy_curves(history)
 
 if __name__ == "__main__":
     main()
