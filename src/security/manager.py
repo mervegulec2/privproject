@@ -108,14 +108,8 @@ def create_security_manager(config: Dict[str, Any]) -> SecurityManager:
         attacks.append(MIAFeasibilityAttack())
 
     if "mia" in active_attack_names:
-        from src.security.attacks.membership.mia_proto_scoring import PrototypeMIAAttack
-        attacks.append(
-            PrototypeMIAAttack(
-                num_classes=int(config.get("num_classes", 10)),
-                max_aux_samples=int(os.environ.get("MIA_MAX_AUX", "512")),
-                scorer=os.environ.get("MIA_SCORER", "cosine"),
-            )
-        )
+        from src.security.attacks.membership.mia_auditor import ScientificMIAAuditor
+        attacks.append(ScientificMIAAuditor(num_classes=int(config.get("num_classes", 10))))
     
     return SecurityManager(
         active_defenses=defenses,

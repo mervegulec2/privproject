@@ -141,3 +141,25 @@ def plot_accuracy_curves(data: Union[Dict[str, List[float]], str], save_path: st
     plt.savefig(save_path, dpi=300)
     plt.close()
     print(f"[Plotting] Saved training curves to {save_path}")
+
+def plot_mia_distribution(member_scores: List[float], non_member_scores: List[float], save_path: str = "outputs/security/eval_results/mia_distribution.png"):
+    """
+    Plots the probability density of member vs non-member scores.
+    This is the standard 'MIA Histogram' figure for security papers.
+    """
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    sns.set_theme(style="white")
+    plt.figure(figsize=(10, 6))
+
+    sns.histplot(member_scores, label="Members (Training)", color="blue", kde=True, stat="density", alpha=0.5)
+    sns.histplot(non_member_scores, label="Non-Members (Test)", color="red", kde=True, stat="density", alpha=0.5)
+
+    plt.title("Membership Inference Score Distribution", fontsize=14, fontweight="bold")
+    plt.xlabel("Similarity Score (Cosine)", fontsize=12)
+    plt.ylabel("Density", fontsize=12)
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    print(f"[Plotting] Saved MIA distribution plot to {save_path}")

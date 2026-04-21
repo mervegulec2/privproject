@@ -39,11 +39,32 @@ def main():
     print(f"Executing {args.attack} attack...")
     results = attack_module.execute(snapshot["model_state"], {"clients": snapshot["clients"], "log_model_state": True})
 
-    # 5. Scientific Scoring (Comparison vs Ground Truth)
-    # We will try to find the actual ground truth for each client
+    # 5. Scientific Scoring
     summary_metrics = {}
     
-    if args.attack == "reconstruction":
+    if args.attack == "mia":
+        from src.security.plotter import plot_mia_distribution
+        print("\n" + "="*30)
+        print("MIA SCIENTIFIC REPORT")
+        print("="*30)
+        
+        all_member_scores = []
+        all_non_member_scores = []
+        
+        for client_key, stats in results.items():
+            print(f"\n{client_key}:")
+            print(f"  - AUC-ROC: {stats['auc_roc']:.4f}")
+            print(f"  - Attacker Advantage: {stats['attacker_advantage']:.4f}")
+            print(f"  - Confidence Gap: {stats['confidence_gap']:.4f}")
+            print(f"  - TPR @ 1% FPR: {stats['tpr_at_1percent_fpr']:.4f}")
+            
+            all_member_scores.extend(stats.get("member_scores", []))
+            all_non_member_scores.extend(stats.get("non_member_scores", []))
+        
+        if all_member_scores:
+            plot_mia_distribution(all_member_scores, all_non_member_scores, os.path.join(args.save_dir, "mia_distribution.png"))
+            
+        return 
         all_originals = []
         all_reconstructed = []
         
