@@ -5,100 +5,133 @@ import torch
 import numpy as np
 from typing import Dict, List, Any
 from src.security.manager import security_factory
+from src.data_utils import load_cifar10, Cifar10Config, load_split
+from PIL import Image
 
 def main():
     parser = argparse.ArgumentParser(description="PFL Security Evaluation Tool")
     parser.add_argument("--snapshot", type=str, required=True, help="Path to the snapshot .pkl file")
     parser.add_argument("--attack", type=str, required=True, choices=["reconstruction", "mia", "cpa"], help="Attack type")
     parser.add_argument("--save_dir", type=str, default="outputs/security/eval_results", help="Directory to save results")
-    args = parser.parse_dir = args.save_dir
+    parser.add_argument("--limit_clients", type=int, default=0, help="Limit number of clients to attack (0 for all)")
+    parser.add_argument("--limit_classes", type=int, default=0, help="Limit number of classes per client to attack (0 for all)")
+    args = parser.parse_args()
 
     # 1. Load Snapshot
     if not os.path.exists(args.snapshot):
         print(f"Error: Snapshot {args.snapshot} not found.")
         return
 
-    with open(args.snapshot, "rb") as f:
-        snapshot = pickle.load(f)
+    try:
+        with open(args.snapshot, "rb") as f:
+            snapshot = pickle.load(f)
+    except Exception as e:
+        print(f"Error loading snapshot: {e}")
+        return
 
-    # 2. Setup Security Manager with the specific attack
-    config = {
-        "attacks": [args.attack],
-        "num_classes": 10,
-        "log_model_state": True
-    }
-    manager = security_factory(config)
+    # Filter snapshot if limits are set
+    if args.limit_clients > 0:
+        snapshot["clients"] = snapshot["clients"][:args.limit_clients]
     
-    # Extract attack module
+    if args.limit_classes > 0:
+        for client in snapshot["clients"]:
+            keys = list(client["protos"].keys())[:args.limit_classes]
+            client["protos"] = {k: client["protos"][k] for k in keys}
+            client["counts"] = {k: client["counts"][k] for k in keys}
+
+    # 2. Setup Security Manager
+    config = {"attacks": [args.attack], "num_classes": 10, "log_model_state": True}
+    manager = security_factory(config)
     attack_module = manager.attacks[0]
 
-    # 3. Prepare Save Directory
     os.makedirs(args.save_dir, exist_ok=True)
 
     # 4. Execute Attack
     print(f"Executing {args.attack} attack...")
-    results = attack_module.execute(snapshot["model_state"], {"clients": snapshot["clients"], "log_model_state": True})
+    results = attack_module.execute(snapshot.get("model_state"), {"clients": snapshot["clients"], "log_model_state": True})
 
     # 5. Scientific Scoring
     
-    # --- CASE 1: MIA ---
     if args.attack == "mia":
         from src.security.plotter import plot_mia_distribution
-        print("\n" + "="*30)
-        print("MIA SCIENTIFIC REPORT")
-        print("="*30)
-        all_member_scores = []
-        all_non_member_scores = []
-        for client_key, stats in results.items():
-            print(f"\n{client_key}:")
-            print(f"  - AUC-ROC: {stats['auc_roc']:.4f}")
-            print(f"  - Attacker Advantage: {stats['attacker_advantage']:.4f}")
-            print(f"  - Confidence Gap: {stats['confidence_gap']:.4f}")
-            print(f"  - TPR @ 1% FPR: {stats['tpr_at_1percent_fpr']:.4f}")
-            all_member_scores.extend(stats.get("member_scores", []))
-            all_non_member_scores.extend(stats.get("non_member_scores", []))
-        if all_member_scores:
-            plot_mia_distribution(all_member_scores, all_non_member_scores, os.path.join(args.save_dir, "mia_distribution.png"))
+        print("\n" + "="*30 + "\nMIA SCIENTIFIC REPORT\n" + "="*30)
+        all_m, all_nm = [], []
+        for ck, stats in results.items():
+            print(f"\n{ck}:")
+            for k, v in stats.items():
+                if k not in ["member_scores", "non_member_scores"]: print(f"  - {k}: {v:.4f}")
+            all_m.extend(stats.get("member_scores", []))
+            all_nm.extend(stats.get("non_member_scores", []))
+        if all_m: plot_mia_distribution(all_m, all_nm, os.path.join(args.save_dir, "mia_distribution.png"))
         return
 
-    # --- CASE 2: CPA ---
     if args.attack == "cpa":
-        print("\n" + "="*30)
-        print("CPA SCIENTIFIC REPORT")
-        print("="*30)
-        for client_key, stats in results.items():
-            print(f"\n{client_key}:")
-            print(f"  - F1-Score: {stats['f1_score']:.4f}")
-            print(f"  - Precision: {stats['precision']:.4f}")
-            print(f"  - Recall: {stats['recall']:.4f}")
-            print(f"  - Detected {stats['n_detected_classes']} out of {stats['n_true_classes']} real classes")
-            if stats['false_positive_classes']:
-                print(f"  - WARNING: False Positives found! {stats['false_positive_classes']}")
+        print("\n" + "="*30 + "\nCPA SCIENTIFIC REPORT\n" + "="*30)
+        for ck, stats in results.items():
+            print(f"\n{ck}:\n  - F1-Score: {stats.get('f1_score', 0):.4f}\n  - Precision: {stats.get('precision',0):.4f}\n  - Recall: {stats.get('recall',0):.4f}")
         return
 
-    # --- CASE 3: RECONSTRUCTION ---
     if args.attack == "reconstruction":
-        from src.security.plotter import plot_reconstruction_visuals
         from src.security.metrics import get_reconstruction_fidelity
-        all_originals = []
-        all_reconstructed = []
+        from src.security.plotter import plot_reconstruction_visuals
+
+        # Robust Split Loading
+        split_path = "outputs/splits/cifar10_dirichlet_a0.1_s42_c10.npy"
+        if not os.path.exists(split_path):
+            print(f"Error: Split file {split_path} not found. Please run PFL first.")
+            return
         
-        print("\n" + "="*30)
-        print("FINAL SECURITY SCORES (RECONSTRUCTION)")
-        print("="*30)
-        print(f"{'Client':<12} | {'Class':<6} | {'SSIM':<8} | {'PSNR':<10} | {'Cosine':<8}")
-        print("-" * 55)
+        train_ds, _ = load_cifar10(Cifar10Config(root="data"))
+        splits = load_split(split_path)
+        
+        print("\n" + "="*30 + "\nFINAL SECURITY SCORES (RECONSTRUCTION)\n" + "="*30)
+        comparison_data = []
 
         for client_key, recon_dict in results.items():
-            cid = client_key.split("_")[1]
-            for class_idx, recon_img in recon_dict.items():
-                # Compare vs Ground Truth (Mocked for now - need actual data loader integration)
-                # In a real audit, we would load the ground truth from the dataloader
-                # For now, we report success based on internal L-BFGS convergence
-                pass
-        
-        # Note: Professional visual matrix is generated inside the attack if requested, 
-        # or we call it here.
+            try:
+                cid = int(client_key.split("_")[1])
+            except (IndexError, ValueError): continue
+            
+            print(f"\n{client_key}:")
+            if cid not in splits:
+                print(f"  [Warning] Client {cid} missing from splits.")
+                continue
+            
+            member_indices = splits[cid]
+            for class_idx, info in recon_dict.items():
+                target_class = int(class_idx)
+                recon_path = info["save_path"]
+                
+                if not os.path.exists(recon_path): continue
+                
+                # 1. Load Reconstructed Image
+                recon_img = np.array(Image.open(recon_path)).astype(np.float32) / 255.0
+
+                # 2. Find Real Images Centroid
+                class_indices = [i for i in member_indices if int(train_ds.targets[i]) == target_class]
+                if not class_indices: continue
+                
+                real_imgs = []
+                for i in class_indices:
+                    img_np = np.array(train_ds[i][0]).transpose(1, 2, 0)
+                    # Min-Max Normalize to [0, 1] for visual fidelity check
+                    img_np = (img_np - img_np.min()) / (img_np.max() - img_np.min() + 1e-8)
+                    real_imgs.append(img_np)
+                
+                mean_real_img = np.mean(real_imgs, axis=0)
+                
+                # 3. Fidelity
+                metrics = get_reconstruction_fidelity(mean_real_img, recon_img)
+                print(f"  Class {target_class} -> SSIM: {metrics['ssim']:.4f} | PSNR: {metrics['psnr']:.2f}dB | Cosine: {metrics['cosine_sim']:.4f}")
+                
+                comparison_data.append({
+                    "original": mean_real_img,
+                    "reconstructed": recon_img,
+                    "title": f"C{cid} Class {target_class}"
+                })
+
+        if comparison_data:
+            plot_reconstruction_visuals(comparison_data, os.path.join(args.save_dir, "visual_leakage_matrix.png"))
         return
 
 if __name__ == "__main__":
