@@ -166,22 +166,6 @@ def _flower_client_proc(server_address: str, cid: int, split_path: str, cfg_dict
     fl.client.start_numpy_client(server_address=server_address, client=client)
 
 
-def aggregate_prototypes(client_proto_dicts: list[Dict[int, np.ndarray]], client_count_dicts: list[Dict[int, int]], num_classes: int = 10) -> Dict[int, np.ndarray]:
-    """Weighted mean-aggregate class-wise prototypes across clients (Eq 6)."""
-    global_protos: Dict[int, np.ndarray] = {}
-    for c in range(num_classes):
-        c_protos = []
-        c_counts = []
-        for p_dict, c_dict in zip(client_proto_dicts, client_count_dicts):
-            if c in p_dict and c in c_dict:
-                c_protos.append(p_dict[c])
-                c_counts.append(c_dict[c])
-        if c_protos:
-            total = sum(c_counts)
-            weighted_sum = sum(p * cnt for p, cnt in zip(c_protos, c_counts))
-            global_protos[c] = (weighted_sum / total).astype(np.float32)
-    return global_protos
-
 def _reset_ray_if_needed() -> None:
     try:
         import ray  # type: ignore
