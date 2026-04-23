@@ -107,7 +107,7 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
 
         # Apply Defenses (Modular Hook)
         if self.security_manager:
-            local_protos = self.security_manager.apply_defenses(local_protos, local_counts)
+            local_protos = self.security_manager.apply_defenses(local_protos)
 
         # Evaluate on all provided test sets
         accuracies = {}
