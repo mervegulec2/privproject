@@ -16,39 +16,96 @@ class SecurityManager:
         os.makedirs(self.snapshot_dir, exist_ok=True)
 
     def apply_defenses(self, prototypes: Dict[int, torch.Tensor]) -> Dict[int, torch.Tensor]:
-        """Applies all registered privacy-preserving defenses (e.g., DP, Perturbation)."""
+        """Applies all registered privacy-preserving defenses and calculates distortion metrics."""
+        from src.security.metrics import calculate_statistical_leakage
+        import numpy as np
+        
         perturbed_protos = prototypes
+        self.defense_stats = {}
+        
         for defense in self.defenses:
+            original_protos = {c: p.clone() if hasattr(p, 'clone') else p.copy() for c, p in perturbed_protos.items()}
             perturbed_protos = defense.apply(perturbed_protos)
+            
+            # Calculate distortion for this defense layer
+            kls, corrs = [], []
+            for c in perturbed_protos:
+                if c in original_protos:
+                    # Convert to numpy for the metric function
+                    o_np = original_protos[c].detach().cpu().numpy() if hasattr(original_protos[c], 'detach') else original_protos[c]
+                    p_np = perturbed_protos[c].detach().cpu().numpy() if hasattr(perturbed_protos[c], 'detach') else perturbed_protos[c]
+                    
+                    stats = calculate_statistical_leakage(o_np, p_np)
+                    kls.append(stats["kl_divergence"])
+                    corrs.append(stats["correlation_leakage"])
+            
+            self.defense_stats[defense.__class__.__name__] = {
+                "avg_kl": float(np.mean(kls)) if kls else 0.0,
+                "avg_correlation": float(np.mean(corrs)) if corrs else 1.0
+            }
+            
         return perturbed_protos
 
     def log_and_attack(self, round_idx: int, client_data: List[Dict[str, Any]], model: Optional[nn.Module] = None):
         """
         1. Captures a snapshot of the current global state and client transmissions.
-        2. Optionally runs active attacks (Honest-but-Curious server perspective).
+        2. Executes active attacks and prints a summary.
         """
         # Prepare snapshot
         snapshot = {
             "round": round_idx,
             "clients": client_data, # List of {cid, protos, counts}
-            "model_state": model.state_dict() if (model and self.log_model_state) else None
+            "model_state": model.state_dict() if (model and self.log_model_state) else None,
+            "defense_stats": getattr(self, "defense_stats", {})
         }
 
-        # Save snapshot for post-hoc analysis (The 'Scientific Snapshot')
+        # Save snapshot
         snapshot_path = os.path.join(self.snapshot_dir, f"round_{round_idx}.pkl")
         import pickle
         with open(snapshot_path, "wb") as f:
             pickle.dump(snapshot, f)
-        # print(f"[SecurityManager] Saved snapshot for round {round_idx} to {snapshot_path}")
 
         # Run Live Attacks
         attack_results = {}
+        print(f"\n" + "="*60)
+        print(f" SECURITY AUDIT | ROUND {round_idx}")
+        print("="*60)
+        
+        if snapshot["defense_stats"]:
+            print(f" [Defenses Active]")
+            for d_name, d_stat in snapshot["defense_stats"].items():
+                print(f"  - {d_name}: KL={d_stat['avg_kl']:.4f}, Corr={d_stat['avg_correlation']:.4f}")
+        
         for attack in self.attacks:
             attack_name = attack.__class__.__name__
-            # print(f"[SecurityManager] Executing {attack_name}...")
             results = attack.execute(snapshot["model_state"], {"clients": client_data, "log_model_state": self.log_model_state})
             attack_results[attack_name] = results
+            
+            # Print Summary for this attack
+            print(f" [Attack: {attack_name}]")
+            if "status" in results and results["status"] == "skipped":
+                print(f"  - Status: Skipped ({results.get('reason', '')})")
+            else:
+                # Summarize client-level results
+                avg_metrics = {}
+                for cid_key, c_res in results.items():
+                    if not isinstance(c_res, dict): continue
+                    # Handle nested class-level results (like Reconstruction)
+                    if any(isinstance(v, dict) for v in c_res.values()):
+                        for cls_id, cls_res in c_res.items():
+                            if not isinstance(cls_res, dict): continue
+                            for m_name, m_val in cls_res.items():
+                                if isinstance(m_val, (int, float)):
+                                    avg_metrics[m_name] = avg_metrics.get(m_name, []) + [m_val]
+                    else:
+                        for m_name, m_val in c_res.items():
+                            if isinstance(m_val, (int, float)):
+                                avg_metrics[m_name] = avg_metrics.get(m_name, []) + [m_val]
+                
+                for m_name, m_vals in avg_metrics.items():
+                    print(f"  - Avg {m_name}: {np.mean(m_vals):.4f}")
         
+        print("="*60 + "\n")
         return attack_results
 
 def security_factory(config: Dict[str, Any]) -> SecurityManager:
@@ -56,9 +113,23 @@ def security_factory(config: Dict[str, Any]) -> SecurityManager:
     Factory method to initialize the SecurityManager based on environment or config.
     """
     defenses = []
-    # if config.get("defense_type") == "gaussian":
-    #     from src.security.defenses.gaussian import GaussianNoiseDefense
-    #     defenses.append(GaussianNoiseDefense(sigma=config.get("sigma", 0.01)))
+    active_defense_names = config.get("defenses", [])
+    if not active_defense_names:
+        env_defenses = os.environ.get("SECURITY_DEFENSES", "").strip()
+        if env_defenses:
+            active_defense_names = [d.strip() for d in env_defenses.split(",") if d.strip()]
+
+    if "gaussian_dp" in active_defense_names:
+        from src.security.defenses.dp_gaussian import GaussianDPDefense
+        clip_norm = float(os.environ.get("DP_CLIP_NORM", config.get("clip_norm", 1.0)))
+        sigma = os.environ.get("DP_SIGMA")
+        epsilon = os.environ.get("DP_EPSILON")
+        delta = float(os.environ.get("DP_DELTA", 1e-5))
+        
+        sigma = float(sigma) if sigma else None
+        epsilon = float(epsilon) if epsilon else None
+        
+        defenses.append(GaussianDPDefense(clip_norm=clip_norm, sigma=sigma, epsilon=epsilon, delta=delta))
 
     attacks = []
     active_attack_names = config.get("attacks", [])

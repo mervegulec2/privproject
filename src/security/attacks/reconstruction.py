@@ -78,14 +78,34 @@ class PrototypeReconstructionAttack(BaseAttack):
                 # Final post-processing
                 with torch.no_grad():
                     recovered_img = dummy_data.clone().detach().cpu()
-                    # Clip to valid [0, 1] range instead of stretching
                     recovered_img = torch.clamp(recovered_img, 0, 1)
                 
                 save_path = os.path.join(self.save_dir, f"recon_c{cid}_class{target_class}.png")
                 save_image(recovered_img, save_path)
                 
+                # --- NEW: Calculate Fidelity Metrics (Auditor perspective) ---
+                from src.security.metrics import get_reconstruction_fidelity
+                from src.data_utils import load_cifar10, Cifar10Config, load_split
+                
+                # Get ground truth mean image for this client/class
+                train_ds, _ = load_cifar10(Cifar10Config(root="data"))
+                splits = load_split()
+                fid_metrics = {"psnr": 0.0, "ssim": 0.0}
+                
+                if splits and str(cid) in splits:
+                    indices = splits[str(cid)]
+                    # Find samples of this class
+                    class_indices = [i for i in indices if train_ds.targets[i] == int(target_class)]
+                    if class_indices:
+                        gt_imgs = torch.stack([train_ds[i][0] for i in class_indices])
+                        gt_mean = gt_imgs.mean(dim=0)
+                        fid_metrics = get_reconstruction_fidelity(gt_mean.numpy(), recovered_img.squeeze(0).numpy())
+
                 client_results[int(target_class)] = {
-                    "save_path": save_path
+                    "save_path": save_path,
+                    "psnr": fid_metrics["psnr"],
+                    "ssim": fid_metrics["ssim"],
+                    "cosine_sim": fid_metrics.get("cosine_sim", 0.0)
                 }
             
             results[f"client_{cid}"] = client_results

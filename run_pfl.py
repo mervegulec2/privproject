@@ -23,7 +23,7 @@ from src.data_utils import (
 from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed, compute_class_weights
 from src.aggregation import PrototypeStrategy
-from src.security.manager import SecurityManager
+from src.security.manager import SecurityManager, security_factory
 from src.security.plotter import plot_accuracy_curves
 from src.eval.test_sets import (
     create_local_proportional_indices,
@@ -225,11 +225,10 @@ def run_flower_experiment(
         swa_last_epochs=swa_last_epochs,
     )
 
-    security_manager = SecurityManager(
-        active_defenses=[],
-        active_attacks=[],
-        log_model_state=os.environ.get("SECURITY_LOGGING", "1") == "1",
-    )
+    security_manager = security_factory({
+        "num_classes": 10,
+        "log_model_state": os.environ.get("SECURITY_LOGGING", "1") == "1"
+    })
 
     if fl is None:
         raise RuntimeError("flwr is required. Install flwr in the active venv.")
