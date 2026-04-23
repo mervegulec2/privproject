@@ -137,9 +137,14 @@ def plot_accuracy_curves(data: Union[Dict[str, List[float]], str], save_path: st
         scale = 100 if df["avg_global"].iloc[0] <= 1.0 else 1.0
         plt.plot(rounds, df["avg_global"] * scale, marker='o', label='Global')
         plt.plot(rounds, df["avg_local_proportional"] * scale, marker='s', label='Local Prop')
+        plt.plot(rounds, df["avg_local"] * scale, marker='^', label='Local (Weighted)')
     else:
         rounds = range(1, len(data["global"]) + 1)
         plt.plot(rounds, data["global"], marker='o', label='Global')
+        if "local" in data:
+            plt.plot(rounds, data["local"], marker='^', label='Local (Weighted)')
+        if "local_prop" in data:
+            plt.plot(rounds, data["local_prop"], marker='s', label='Local Prop')
     plt.legend()
     plt.savefig(save_path, dpi=300)
     plt.close()
