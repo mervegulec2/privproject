@@ -27,13 +27,20 @@ class SecurityManager:
             original_protos = {c: p.clone() if hasattr(p, 'clone') else p.copy() for c, p in perturbed_protos.items()}
             perturbed_protos = defense.apply(perturbed_protos, counts=counts)
             
+            # Collect internal defense metrics if available
+            if hasattr(defense, "last_stats"):
+                self.defense_stats.update(defense.last_stats)
+            
             # Calculate distortion for this defense layer
             kls, corrs = [], []
             for c in perturbed_protos:
                 if c in original_protos:
-                    # Convert to numpy for the metric function
                     o_np = original_protos[c].detach().cpu().numpy() if hasattr(original_protos[c], 'detach') else original_protos[c]
-                    p_np = perturbed_protos[c].detach().cpu().numpy() if hasattr(perturbed_protos[c], 'detach') else perturbed_protos[c]
+                    
+                    # If defense returned a list (like Dummy), use the first element for KL calculation
+                    p_val = perturbed_protos[c]
+                    p_np = p_val[0] if isinstance(p_val, (list, tuple)) else p_val
+                    p_np = p_np.detach().cpu().numpy() if hasattr(p_np, 'detach') else p_np
                     
                     stats = calculate_statistical_leakage(o_np, p_np)
                     kls.append(stats["kl_divergence"])
