@@ -1,10 +1,16 @@
-import argparse
 import os
 import shutil
 import torch
 import numpy as np
 import pickle
 from torch.utils.data import DataLoader, Subset
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from typing import Dict
 from src.data_utils import (
     load_cifar10,
@@ -42,54 +48,7 @@ def _select_device() -> str:
         return "mps"
     return "cpu"
 
-# 1. Define the local client (no Ray/Flower dependency required)
-class LocalPrototypeClient:
-    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split, cfg: TrainConfig, security_manager: SecurityManager = None):
-        self.cid = cid
-        self.train_ds = train_ds
-        self.test_sets = test_sets
-        self.split_indices = split[cid]
-        max_samples = int(os.environ.get("MAX_SAMPLES_PER_CLIENT", "0"))
-        if max_samples > 0 and len(self.split_indices) > max_samples:
-            # Keep it deterministic for quick smoke tests
-            self.split_indices = self.split_indices[:max_samples]
-        self.cfg = cfg
-        self.security_manager = security_manager
-        
-        # Persistent local model
-        self.model = ResNet18Cifar(num_classes=10).to(cfg.device)
-        self.device = cfg.device
 
-    def fit(self, global_protos: Dict[int, np.ndarray]) -> Dict[str, object]:
-        """Local training with prototype alignment + report local prototypes and accuracy."""
-        train_loader = DataLoader(
-            Subset(self.train_ds, self.split_indices), 
-            batch_size=self.cfg.batch_size, 
-            shuffle=True
-        )
-        
-        class_weights = compute_class_weights(self.train_ds, self.split_indices, num_classes=10, device=self.device)
-        
-        progress = os.environ.get("PROGRESS", "0") != "0"
-        lambda_p = float(os.environ.get("LD", os.environ.get("LAMBDA_P", "0.1")))
-        train_local_proto(self.model, train_loader, global_protos, self.cfg, lambda_p=lambda_p, progress=progress, cid=self.cid, class_weights=class_weights)
-
-        local_protos, local_counts = compute_prototypes(self.model, train_loader, self.device)
-        
-        # Apply Defenses (Modular Hook)
-        if self.security_manager:
-            local_protos = self.security_manager.apply_defenses(local_protos, local_counts)
-
-        # Evaluate on all provided test sets
-        accuracies = {}
-        for name, subset in self.test_sets.items():
-            if len(subset) == 0:
-                accuracies[name] = 0.0
-                continue
-            test_loader = DataLoader(subset, batch_size=256, shuffle=False)
-            accuracies[name] = float(evaluate_accuracy(self.model, test_loader, self.device))
-
-        return {"n": len(self.split_indices), "accuracies": accuracies, "protos": local_protos, "counts": local_counts}
 
 
 class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object):  # type: ignore[misc]
@@ -131,7 +90,11 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
             shuffle=True,
         )
 
-        class_weights = compute_class_weights(self.train_ds, self.split_indices, num_classes=10, device=self.device)
+        use_cw = os.environ.get("USE_CLASS_WEIGHTS", "1") != "0"
+        class_weights = (
+            compute_class_weights(self.train_ds, self.split_indices, num_classes=10, device=self.device)
+            if use_cw else None
+        )
 
         progress = os.environ.get("PROGRESS", "0") != "0"
         lambda_p = float(os.environ.get("LD", os.environ.get("LAMBDA_P", "0.1")))
@@ -219,52 +182,9 @@ def aggregate_prototypes(client_proto_dicts: list[Dict[int, np.ndarray]], client
             global_protos[c] = (weighted_sum / total).astype(np.float32)
     return global_protos
 
-def _parse_exp_mode() -> str:
-    p = argparse.ArgumentParser(
-        description="Three fixed experiment commands: epochs (sweep), augment, swa.",
-    )
-    p.add_argument(
-        "--exp-mode",
-        required=True,
-        choices=("epochs", "augment", "swa"),
-        help="epochs: sweep EPOCH_SWEEP (default 3,5,10) — tek komutta hepsi | "
-        "augment: RandAugment + Mixup; yerel epoch=EPOCHS (default 5) | "
-        "swa: SWA; yerel epoch=EPOCHS (default 5)",
-    )
-    args, _unknown = p.parse_known_args()
-    return args.exp_mode
-
-
-def _parse_epoch_sweep() -> list[int]:
-    raw = os.environ.get("EPOCH_SWEEP", "3,5,10")
-    out = [int(x.strip()) for x in raw.split(",") if x.strip()]
-    if not out:
-        raise ValueError("EPOCH_SWEEP produced no values; use e.g. EPOCH_SWEEP=3,5,10")
-    return out
-
-
-def _fixed_local_epochs() -> int:
-    """Default local epochs for augment / swa single runs (not the sweep)."""
-    return int(os.environ.get("EPOCHS", "5"))
-
-
-def _resolve_training_knobs(exp_mode: str) -> tuple[str, float, bool, int]:
-    """Returns (train_transform, mixup_alpha, swa_enabled, swa_last_epochs)."""
-    swa_last = int(os.environ.get("SWA_LAST_EPOCHS", "2"))
-    if exp_mode == "epochs":
-        return "default", 0.0, False, swa_last
-    if exp_mode == "augment":
-        mix = float(os.environ.get("MIXUP_ALPHA", "0.2"))
-        return "randaugment", mix, False, swa_last
-    if exp_mode == "swa":
-        return "default", 0.0, True, swa_last
-    raise ValueError(f"Unknown exp_mode: {exp_mode}")
-
-
 def _reset_ray_if_needed() -> None:
     try:
         import ray  # type: ignore
-
         if ray.is_initialized():
             ray.shutdown()
     except Exception:
@@ -280,12 +200,12 @@ def _clear_client_model_checkpoints() -> None:
 
 def run_flower_experiment(
     *,
-    exp_mode: str,
+    exp_mode: str = "baseline",
     epochs: int,
-    train_transform: str,
-    mixup_alpha: float,
-    swa_enabled: bool,
-    swa_last_epochs: int,
+    train_transform: str = "default",
+    mixup_alpha: float = 0.0,
+    swa_enabled: bool = False,
+    swa_last_epochs: int = 2,
     num_clients: int,
     num_rounds: int,
     alpha: float,
@@ -296,10 +216,20 @@ def run_flower_experiment(
     split,
     metrics_csv_path: str,
     plot_path: str,
+    # Explicit hyperparameter overrides (used by the sweep; env-vars are the fallback)
+    lambda_p: float = None,
+    use_class_weights: bool = None,
 ) -> None:
     """Single Flower Ray simulation with metrics/plots written to the given paths."""
     train_backbone = os.environ.get("TRAIN_BACKBONE", "1") != "0"
     train_head = os.environ.get("TRAIN_HEAD", "1") != "0"
+
+    # Apply explicit overrides to env so FlowerPrototypeClient picks them up
+    if lambda_p is not None:
+        os.environ["LAMBDA_P"] = str(lambda_p)
+        os.environ["LD"] = str(lambda_p)
+    if use_class_weights is not None:
+        os.environ["USE_CLASS_WEIGHTS"] = "1" if use_class_weights else "0"
 
     cfg_train = TrainConfig(
         epochs=epochs,
@@ -375,19 +305,21 @@ def run_flower_experiment(
     plot_accuracy_curves(metrics_csv_path, save_path=plot_path)
 
 
-# 2. Simulation Orchestrator
+# ---------------------------------------------------------------------------
+# Baseline entry point — single FL run with default settings.
+# For performance experiments (epoch sweep / augment / swa) use:
+#   python pfl_performance_experiments.py --exp-mode <epochs|augment|swa>
+# ---------------------------------------------------------------------------
 def main():
-    exp_mode = _parse_exp_mode()
-    train_transform, mixup_alpha, swa_enabled, swa_last_epochs = _resolve_training_knobs(exp_mode)
-
     num_clients = int(os.environ.get("NUM_CLIENTS", "10"))
     num_rounds = int(os.environ.get("NUM_ROUNDS", "2"))
+    epochs = int(os.environ.get("EPOCHS", "5"))
     alpha = float(os.environ.get("ALPHA", "0.1"))
     seed = int(os.environ.get("SEED", "42"))
     device = _select_device()
 
     set_seed(seed)
-    train_ds, test_ds = load_cifar10(Cifar10Config(root="data", train_transform=train_transform))
+    train_ds, test_ds = load_cifar10(Cifar10Config(root="data"))
 
     split_path = f"outputs/splits/cifar10_dirichlet_a{alpha}_s{seed}_c{num_clients}.npy"
     if not os.path.exists(split_path):
@@ -396,60 +328,13 @@ def main():
     else:
         split = load_split(split_path)
 
-    if exp_mode == "epochs":
-        sweep = _parse_epoch_sweep()
-        base = os.path.join("outputs", "metrics", "experiments", "epochs")
-        os.makedirs(base, exist_ok=True)
-        print(
-            f"\n>>> Epoch sweep: {sweep} (set EPOCH_SWEEP to change). "
-            f"Outputs under {base}/\n",
-            flush=True,
-        )
-        for ep in sweep:
-            _reset_ray_if_needed()
-            _clear_client_model_checkpoints()
-            csv_p = os.path.join(base, f"ep_{ep}.csv")
-            plot_p = os.path.join(base, f"accuracy_ep_{ep}.png")
-            run_flower_experiment(
-                exp_mode=exp_mode,
-                epochs=ep,
-                train_transform=train_transform,
-                mixup_alpha=mixup_alpha,
-                swa_enabled=swa_enabled,
-                swa_last_epochs=swa_last_epochs,
-                num_clients=num_clients,
-                num_rounds=num_rounds,
-                alpha=alpha,
-                seed=seed,
-                device=device,
-                train_ds=train_ds,
-                test_ds=test_ds,
-                split=split,
-                metrics_csv_path=csv_p,
-                plot_path=plot_p,
-            )
-        return
-
-    fixed_epochs = _fixed_local_epochs()
-    sub = "augment" if exp_mode == "augment" else "swa"
-    base = os.path.join("outputs", "metrics", "experiments", sub)
+    base = os.path.join("outputs", "metrics")
     os.makedirs(base, exist_ok=True)
     _reset_ray_if_needed()
     _clear_client_model_checkpoints()
-    csv_p = os.path.join(base, "simulation_results.csv")
-    plot_p = os.path.join(base, "accuracy_curve.png")
-    print(
-        f"\n>>> Single run: local_epochs={fixed_epochs} (set EPOCHS to change). "
-        f"Outputs under {base}/\n",
-        flush=True,
-    )
+
     run_flower_experiment(
-        exp_mode=exp_mode,
-        epochs=fixed_epochs,
-        train_transform=train_transform,
-        mixup_alpha=mixup_alpha,
-        swa_enabled=swa_enabled,
-        swa_last_epochs=swa_last_epochs,
+        epochs=epochs,
         num_clients=num_clients,
         num_rounds=num_rounds,
         alpha=alpha,
@@ -458,8 +343,8 @@ def main():
         train_ds=train_ds,
         test_ds=test_ds,
         split=split,
-        metrics_csv_path=csv_p,
-        plot_path=plot_p,
+        metrics_csv_path=os.path.join(base, "simulation_results.csv"),
+        plot_path=os.path.join(base, "accuracy_curve.png"),
     )
 
 

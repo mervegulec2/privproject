@@ -66,9 +66,10 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
             # In real FL, the backbone would be the one being shared or known.
             self.security_manager.log_and_attack(server_round, None, client_snapshots)
         
-        # 3. Save Results (Harmonized with Local Loop)
+        # 3. Save Results
         import os
         import csv
+        import json
         accs_global = [fit_res.metrics["acc_global"] for _, fit_res in results if "acc_global" in fit_res.metrics]
         accs_local_prop = [fit_res.metrics["acc_local_proportional"] for _, fit_res in results if "acc_local_proportional" in fit_res.metrics]
         accs_local = [fit_res.metrics["acc_local"] for _, fit_res in results if "acc_local" in fit_res.metrics]
@@ -81,15 +82,47 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
         avg_g = float(np.mean(accs_global)) if accs_global else 0.0
         avg_lp = float(np.mean(accs_local_prop)) if accs_local_prop else 0.0
         avg_l = float(np.mean(accs_local)) if accs_local else 0.0
-        
+
+        # --- Per-class count aggregation across clients ---
+        # global_class_counts[c] = total samples of class c across all clients this round
+        global_class_counts: dict = {}
+        for counts_dict in client_counts_list:
+            for c, n in counts_dict.items():
+                global_class_counts[c] = global_class_counts.get(c, 0) + n
+        # Sort by class index for consistent column order
+        sorted_classes = sorted(global_class_counts.keys())
+        class_count_values = [global_class_counts.get(c, 0) for c in range(self.num_classes)]
+
+        # --- Main results CSV (round-level averages + total per-class counts) ---
         file_exists = os.path.isfile(csv_path)
+        base_cols = ["round", "avg_global", "avg_local_proportional", "avg_local"]
+        class_cols = [f"total_class_{c}" for c in range(self.num_classes)]
+        all_cols = base_cols + class_cols
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             if not file_exists:
-                writer.writerow(["round", "avg_global", "avg_local_proportional", "avg_local"])
-            writer.writerow([server_round, avg_g, avg_lp, avg_l])
+                writer.writerow(all_cols)
+            writer.writerow([server_round, avg_g, avg_lp, avg_l] + class_count_values)
 
-        print(f"| Round {server_round} | Avg Accs -> Global: {avg_g:.4f} | Local-Prop: {avg_lp:.4f} | Local: {avg_l:.4f}")
+        # --- Per-client class counts CSV (one row per client per round) ---
+        client_counts_csv = csv_path.replace(".csv", "_client_counts.csv")
+        client_counts_exists = os.path.isfile(client_counts_csv)
+        with open(client_counts_csv, "a", newline="") as f:
+            writer = csv.writer(f)
+            if not client_counts_exists:
+                header = ["round", "cid"] + [f"class_{c}" for c in range(self.num_classes)]
+                writer.writerow(header)
+            for snap in client_snapshots:
+                cid = snap["cid"]
+                counts = snap["counts"]
+                row = [server_round, cid] + [counts.get(c, 0) for c in range(self.num_classes)]
+                writer.writerow(row)
+
+        class_count_str = "  ".join(f"c{c}:{global_class_counts.get(c,0)}" for c in range(self.num_classes))
+        print(
+            f"| Round {server_round} | Avg Accs -> Global: {avg_g:.4f} | Local-Prop: {avg_lp:.4f} | Local: {avg_l:.4f}\n"
+            f"|            Class counts (total across clients): {class_count_str}"
+        )
 
         # Return metrics for the Flower history object
         return ndarrays_to_parameters([]), {"avg_accuracy": avg_l}
