@@ -64,7 +64,7 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
             # But the server knows the architecture and initialization.
             # For now we skip model-state here or provide a way to pass the architecture.
             # In real FL, the backbone would be the one being shared or known.
-            self.security_manager.log_and_attack(server_round, None, client_snapshots)
+            self.security_manager.log_and_attack(server_round, client_snapshots, None)
         
         # 3. Save Results
         import os
