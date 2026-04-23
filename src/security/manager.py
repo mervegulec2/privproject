@@ -141,10 +141,12 @@ def security_factory(config: Dict[str, Any]) -> SecurityManager:
     
     if "dummy_prototype" in active_defense_names:
         from src.security.defenses.dummy import DummyPrototypeDefense
+        num_classes = int(config.get("num_classes", 10))
         lambda_val = float(os.environ.get("DUMMY_LAMBDA", 0.7))
         tau = float(os.environ.get("DUMMY_TAU", 0.02))
         dummy_ratio = int(os.environ.get("DUMMY_RATIO", 1))
         defenses.append(DummyPrototypeDefense(
+            num_classes=num_classes,
             lambda_val=lambda_val, tau=tau, dummy_ratio=dummy_ratio
         ))
 
