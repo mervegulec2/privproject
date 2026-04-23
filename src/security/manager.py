@@ -138,6 +138,15 @@ def security_factory(config: Dict[str, Any]) -> SecurityManager:
         defenses.append(AdaptiveGaussianDPDefense(
             clip_norm=clip_norm, alpha=alpha, beta=beta, sigma_max=sigma_max
         ))
+    
+    if "dummy_prototype" in active_defense_names:
+        from src.security.defenses.dummy import DummyPrototypeDefense
+        lambda_val = float(os.environ.get("DUMMY_LAMBDA", 0.7))
+        tau = float(os.environ.get("DUMMY_TAU", 0.02))
+        dummy_ratio = int(os.environ.get("DUMMY_RATIO", 1))
+        defenses.append(DummyPrototypeDefense(
+            lambda_val=lambda_val, tau=tau, dummy_ratio=dummy_ratio
+        ))
 
     attacks = []
     active_attack_names = config.get("attacks", [])

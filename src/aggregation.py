@@ -160,8 +160,14 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
             c_counts = []
             for protos, counts in zip(client_protos_list, client_counts_list):
                 if c in protos and c in counts:
-                    c_protos.append(protos[c])
-                    c_counts.append(counts[c])
+                    p_val = protos[c]
+                    if isinstance(p_val, (list, tuple)):
+                        # Handle multiple prototypes per class (e.g., Real + Dummy)
+                        c_protos.extend(p_val)
+                        c_counts.extend([counts[c]] * len(p_val))
+                    else:
+                        c_protos.append(p_val)
+                        c_counts.append(counts[c])
             
             if c_protos:
                 total_count = sum(c_counts)
