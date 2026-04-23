@@ -283,15 +283,17 @@ def run_flower_experiment(
             cid_int, train_ds, test_sets, split[cid_int], cfg_train, security_manager
         ).to_client()
 
+    # 3. Initialize Strategy with timestamped CSV path
+    metrics_path = os.path.join(run_dir, "metrics", "simulation_results.csv")
+    plot_path = os.path.join(run_dir, "metrics", "accuracy_curve.png")
+    os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
+    
     strategy = PrototypeStrategy(
-        fraction_fit=1.0,
-        fraction_evaluate=0.0,
-        min_fit_clients=num_clients,
-        min_evaluate_clients=0,
-        min_available_clients=num_clients,
         num_classes=10,
+        min_fit_clients=num_clients,
+        min_available_clients=num_clients,
         security_manager=security_manager,
-        metrics_csv_path=metrics_csv_path,
+        metrics_csv_path=metrics_path,
     )
 
     client_resources = {"num_cpus": 1, "num_gpus": 0.0}
@@ -306,7 +308,8 @@ def run_flower_experiment(
         client_resources=client_resources,
     )
 
-    plot_accuracy_curves(metrics_csv_path, save_path=plot_path)
+    # Plot using the CORRECT timestamped path
+    plot_accuracy_curves(metrics_path, save_path=plot_path)
 
 
 # ---------------------------------------------------------------------------

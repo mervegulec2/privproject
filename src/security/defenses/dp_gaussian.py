@@ -24,7 +24,7 @@ class GaussianDPDefense(BaseDefense):
             self.sigma = sigma if sigma is not None else 0.01
             self.epsilon = None # Could calculate backward if needed
 
-    def apply(self, prototypes: Dict[int, torch.Tensor]) -> Dict[int, torch.Tensor]:
+    def apply(self, prototypes: Dict[int, torch.Tensor], **kwargs) -> Dict[int, torch.Tensor]:
         """
         Applies clipping and noise to each class prototype.
         """
