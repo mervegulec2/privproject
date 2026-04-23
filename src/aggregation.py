@@ -118,9 +118,22 @@ class PrototypeStrategy(fl.server.strategy.FedAvg):
                 row = [server_round, cid] + [counts.get(c, 0) for c in range(self.num_classes)]
                 writer.writerow(row)
 
+        txt_path = os.path.join(log_dir, "flower_results.txt") if log_dir else "flower_results.txt"
+        txt_lines = [f"\n[Round {server_round}] Server Aggregated {len(results)} clients."]
+        for _, fit_res in results:
+            cid = fit_res.metrics.get("cid", "?")
+            a_g = fit_res.metrics.get("acc_global", 0.0)
+            a_lp = fit_res.metrics.get("acc_local_proportional", 0.0)
+            a_l = fit_res.metrics.get("acc_local", 0.0)
+            txt_lines.append(f"  - Client {cid}: Global: {a_g:.4f} Local-Prop: {a_lp:.4f} Local: {a_l:.4f}")
+        txt_lines.append(f"| Avg Accs -> Global: {avg_g:.4f} | Local-Prop: {avg_lp:.4f} | Local: {avg_l:.4f}")
+        
+        with open(txt_path, "a") as f:
+            f.write("\n".join(txt_lines) + "\n")
+
         class_count_str = "  ".join(f"c{c}:{global_class_counts.get(c,0)}" for c in range(self.num_classes))
         print(
-            f"| Round {server_round} | Avg Accs -> Global: {avg_g:.4f} | Local-Prop: {avg_lp:.4f} | Local: {avg_l:.4f}\n"
+            "\n".join(txt_lines) + "\n" +
             f"|            Class counts (total across clients): {class_count_str}"
         )
 
