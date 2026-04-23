@@ -107,7 +107,7 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
 
         # Apply Defenses (Modular Hook)
         if self.security_manager:
-            local_protos = self.security_manager.apply_defenses(local_protos)
+            local_protos = self.security_manager.apply_defenses(local_protos, counts=local_counts)
 
         # Evaluate on all provided test sets
         accuracies = {}
@@ -225,20 +225,43 @@ def run_flower_experiment(
         swa_last_epochs=swa_last_epochs,
     )
 
+    # 1. Setup Dynamic Output Directory (Timestamped)
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join("outputs", f"RUN_{timestamp}")
+    os.makedirs(run_dir, exist_ok=True)
+    print(f"\n>>> Results will be saved to: {run_dir}")
+
+    # 2. Initialize Security Manager with new run directory
     security_manager = security_factory({
         "num_classes": 10,
-        "log_model_state": os.environ.get("SECURITY_LOGGING", "1") == "1"
+        "log_model_state": os.environ.get("SECURITY_LOGGING", "1") == "1",
+        "base_dir": run_dir
     })
 
     if fl is None:
         raise RuntimeError("flwr is required. Install flwr in the active venv.")
+
+    # 3. Initialize Strategy with timestamped CSV path
+    metrics_path = os.path.join(run_dir, "metrics", "simulation_results.csv")
+    os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
+    strategy = PrototypeStrategy(
+        fraction_fit=1.0,
+        fraction_evaluate=0.0,
+        min_fit_clients=num_clients,
+        min_evaluate_clients=0,
+        min_available_clients=num_clients,
+        num_classes=10,
+        security_manager=security_manager,
+        metrics_csv_path=metrics_path,
+    )
 
     print(
         f"\n>>> Flower Simulation | exp_mode={exp_mode} | train_tf={train_transform} "
         f"mixup={mixup_alpha} swa={swa_enabled} (last_epochs={swa_last_epochs}) | "
         f"clients={num_clients} rounds={num_rounds} local_epochs={epochs} "
         f"LD={os.environ.get('LD', os.environ.get('LAMBDA_P', '0.1'))} device={cfg_train.device} | "
-        f"metrics_csv={metrics_csv_path} <<<\n",
+        f"metrics_csv={metrics_path} <<<\n",
         flush=True,
     )
 

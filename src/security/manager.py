@@ -8,14 +8,14 @@ class SecurityManager:
     Central orchestrator for all privacy/security modules in the PFL pipeline.
     Connects attacks and defenses to the main training loop.
     """
-    def __init__(self, active_defenses: List[Any], active_attacks: List[Any], log_model_state: bool = False):
+    def __init__(self, active_defenses: List[Any], active_attacks: List[Any], log_model_state: bool = False, base_dir: str = "outputs"):
         self.defenses = active_defenses
         self.attacks = active_attacks
         self.log_model_state = log_model_state
-        self.snapshot_dir = "outputs/security/snapshots"
+        self.snapshot_dir = os.path.join(base_dir, "security/snapshots")
         os.makedirs(self.snapshot_dir, exist_ok=True)
 
-    def apply_defenses(self, prototypes: Dict[int, torch.Tensor]) -> Dict[int, torch.Tensor]:
+    def apply_defenses(self, prototypes: Dict[int, torch.Tensor], counts: Dict[int, int] = None) -> Dict[int, torch.Tensor]:
         """Applies all registered privacy-preserving defenses and calculates distortion metrics."""
         from src.security.metrics import calculate_statistical_leakage
         import numpy as np
@@ -25,7 +25,7 @@ class SecurityManager:
         
         for defense in self.defenses:
             original_protos = {c: p.clone() if hasattr(p, 'clone') else p.copy() for c, p in perturbed_protos.items()}
-            perturbed_protos = defense.apply(perturbed_protos)
+            perturbed_protos = defense.apply(perturbed_protos, counts=counts)
             
             # Calculate distortion for this defense layer
             kls, corrs = [], []
@@ -125,11 +125,19 @@ def security_factory(config: Dict[str, Any]) -> SecurityManager:
         sigma = os.environ.get("DP_SIGMA")
         epsilon = os.environ.get("DP_EPSILON")
         delta = float(os.environ.get("DP_DELTA", 1e-5))
-        
         sigma = float(sigma) if sigma else None
         epsilon = float(epsilon) if epsilon else None
-        
         defenses.append(GaussianDPDefense(clip_norm=clip_norm, sigma=sigma, epsilon=epsilon, delta=delta))
+
+    if "adaptive_gaussian_dp" in active_defense_names:
+        from src.security.defenses.adaptive_gaussian import AdaptiveGaussianDPDefense
+        clip_norm = float(os.environ.get("DP_CLIP_NORM", config.get("clip_norm", 1.0)))
+        alpha = float(os.environ.get("ADAPTIVE_DP_ALPHA", 0.5))
+        beta = float(os.environ.get("ADAPTIVE_DP_BETA", 1.0))
+        sigma_max = float(os.environ.get("ADAPTIVE_DP_SIGMA_MAX", 1.0))
+        defenses.append(AdaptiveGaussianDPDefense(
+            clip_norm=clip_norm, alpha=alpha, beta=beta, sigma_max=sigma_max
+        ))
 
     attacks = []
     active_attack_names = config.get("attacks", [])
@@ -159,5 +167,6 @@ def security_factory(config: Dict[str, Any]) -> SecurityManager:
     return SecurityManager(
         active_defenses=defenses,
         active_attacks=attacks,
-        log_model_state=log_model_state
+        log_model_state=log_model_state,
+        base_dir=config.get("base_dir", "outputs")
     )
