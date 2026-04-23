@@ -23,7 +23,7 @@ from src.data_utils import (
 from src.models import ResNet18Cifar
 from src.train_utils import TrainConfig, train_local_proto, compute_prototypes, evaluate_accuracy, set_seed, compute_class_weights
 from src.aggregation import PrototypeStrategy
-from src.security.manager import SecurityManager, create_security_manager
+from src.security.manager import SecurityManager
 from src.security.plotter import plot_accuracy_curves
 from src.eval.test_sets import (
     create_local_proportional_indices,
@@ -225,13 +225,11 @@ def run_flower_experiment(
         swa_last_epochs=swa_last_epochs,
     )
 
-    security_cfg = {
-        "enable_logging": os.environ.get("SECURITY_LOGGING", "1") == "1",
-        "snapshot_dir": os.environ.get("SNAPSHOT_DIR", "outputs/security/snapshots"),
-        "defenses": [],
-        "attacks": [],
-    }
-    security_manager = create_security_manager(security_cfg)
+    security_manager = SecurityManager(
+        active_defenses=[],
+        active_attacks=[],
+        log_model_state=os.environ.get("SECURITY_LOGGING", "1") == "1",
+    )
 
     if fl is None:
         raise RuntimeError("flwr is required. Install flwr in the active venv.")
@@ -250,7 +248,7 @@ def run_flower_experiment(
         seen_classes = get_seen_classes(train_ds, split[cid_int])
 
         lp_indices = create_local_proportional_indices(
-            test_ds, train_ds, split[cid_int], total_test_samples=1000, seed=seed
+            test_ds, train_ds, split[cid_int], seed=seed
         )
         la_indices = create_local_aware_indices(test_ds, seen_classes)
 

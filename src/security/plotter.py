@@ -2,7 +2,7 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Any
 
 def plot_privacy_utility_tradeoff(
     noise_levels: List[float], 
