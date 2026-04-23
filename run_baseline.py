@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, Subset
 
 from src.data_utils import load_cifar10, Cifar10Config, DirichletSplitConfig, dirichlet_split_indices, save_split, load_split
 from src.models import ResNet18Cifar
-from src.train_utils import TrainConfig, train_one_client, evaluate_accuracy, set_seed
+from src.train_utils_baseline import TrainConfig, train_one_client, evaluate_accuracy, set_seed
 from src.eval.test_sets import (
     create_local_aware_indices,
     create_local_proportional_indices
