@@ -92,7 +92,7 @@ class ScientificMIAAuditor(BaseAttack):
                 audit_results[f"client_{cid}"] = {
                     "auc_roc": leakage["auc_roc"],
                     "attacker_advantage": leakage["attacker_advantage"],
-                    "confidence_gap": leakage["score_gap"],
+                    "confidence_gap": leakage["confidence_gap"],
                     "tpr_at_1percent_fpr": tpr_val,
                     "n_members": len(member_scores),
                     "n_non_members": len(non_member_scores),
