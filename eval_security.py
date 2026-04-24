@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--snapshot", type=str, required=True, help="Path to the snapshot .pkl file")
     parser.add_argument("--attack", type=str, required=True, choices=["reconstruction", "mia", "cpa"], help="Attack type")
     parser.add_argument("--save_dir", type=str, default="outputs/security/eval_results", help="Directory to save results")
-    parser.add_argument("--split_path", type=str, default="outputs/data/client_splits.npy", help="Path to the client dataset splits")
+    parser.add_argument("--split_path", type=str, default="outputs/splits/cifar10_dirichlet_a0.1_s42_c10.npy", help="Path to the client dataset splits")
     parser.add_argument("--limit_clients", type=int, default=0, help="Limit number of clients to attack (0 for all)")
     parser.add_argument("--limit_classes", type=int, default=0, help="Limit number of classes per client to attack (0 for all)")
     args = parser.parse_args()
