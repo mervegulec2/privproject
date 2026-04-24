@@ -3,11 +3,11 @@ pfl_performance_experiments.py
 -------------------------------
 Three-phase hyperparameter sweep for Prototype FL.
 
-Phase 1 — Lambda × Class-Weight grid (2 rounds, epochs=5, no augment)
-  Runs 1–8: all combinations of lambda_p in {0.01, 0.05, 0.10, 0.30}
-            × class_weights in {off, on}
+Phase 1 — Class-Weight grid (2 rounds, epochs=5, no augment)
+  Runs 1–2: class_weights in {off, on}
+  (lambda_p is fixed to 0.1)
 
-Phase 2 — Epoch sweep (best lambda + class_weights from Phase 1, no augment)
+Phase 2 — Epoch sweep (best class_weights from Phase 1, no augment)
   Runs 9–11: epochs in {3, 5, 10}
 
 Phase 3 — Augmentation (best lambda + class_weights + best epochs from Phase 2)
@@ -238,7 +238,6 @@ def _best_row(rows: List[dict], key: str = "avg_local") -> dict:
 # Phase 1 — Lambda × Class-Weight grid
 # ---------------------------------------------------------------------------
 
-PHASE1_LAMBDAS = [0.01, 0.05, 0.10, 0.30]
 PHASE1_CLASS_WEIGHTS = [False, True]
 
 
@@ -255,22 +254,22 @@ def run_phase1(
     base_dir: str,
 ) -> dict:
     """
-    Phase 1: lambda × class_weight grid.
-    Runs 8 configurations (fixed epochs=5, no augment, 1 round).
+    Phase 1: class_weight grid.
+    Runs 2 configurations (fixed epochs=5, lambda_p=0.1, no augment, 1 round).
     Returns the best config dict.
     """
     print("\n" + "#" * 80)
-    print("# PHASE 1 — Lambda × Class-Weight Sweep")
-    print("# Fixed: epochs=5, augment=off, 1 round")
+    print("# PHASE 1 — Class-Weight Sweep")
+    print("# Fixed: epochs=5, augment=off, lambda_p=0.1")
     print("#" * 80)
 
     summary_rows: List[dict] = []
     run_id = 1
 
-    for lp in PHASE1_LAMBDAS:
-        for cw in PHASE1_CLASS_WEIGHTS:
-            label = f"p1_run{run_id}_lp{lp}_cw{'on' if cw else 'off'}"
-            out_dir = os.path.join(base_dir, "phase1", label)
+    for cw in PHASE1_CLASS_WEIGHTS:
+        lp = 0.1  # Fixed lambda_p
+        label = f"p1_run{run_id}_cw{'on' if cw else 'off'}"
+        out_dir = os.path.join(base_dir, "phase1", label)
             accs = _run(
                 label=label,
                 epochs=5,
@@ -288,17 +287,17 @@ def run_phase1(
                 split=split,
                 out_dir=out_dir,
             )
-            row = {
-                "run_id": run_id,
-                "lambda_p": lp,
-                "class_weights": "on" if cw else "off",
-                "epochs": 5,
-                "avg_global": f"{accs['avg_global']:.4f}",
-                "avg_local_prop": f"{accs['avg_local_proportional']:.4f}",
-                "avg_local": f"{accs['avg_local']:.4f}",
-            }
-            summary_rows.append(row)
-            run_id += 1
+        row = {
+            "run_id": run_id,
+            "lambda_p": lp,
+            "class_weights": "on" if cw else "off",
+            "epochs": 5,
+            "avg_global": f"{accs['avg_global']:.4f}",
+            "avg_local_prop": f"{accs['avg_local_proportional']:.4f}",
+            "avg_local": f"{accs['avg_local']:.4f}",
+        }
+        summary_rows.append(row)
+        run_id += 1
 
     summary_path = os.path.join(base_dir, "phase1_summary.csv")
     _write_summary(summary_path, summary_rows)
