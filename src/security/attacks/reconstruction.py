@@ -89,7 +89,7 @@ class PrototypeReconstructionAttack(BaseAttack):
                 
                 # Get ground truth mean image for this client/class
                 train_ds, _ = load_cifar10(Cifar10Config(root="data"))
-                splits = load_split("outputs/data/client_splits.json")
+                splits = load_split(shared_data.get("split_path", "outputs/data/client_splits.npy"))
                 fid_metrics = {"psnr": 0.0, "ssim": 0.0}
                 
                 if splits and str(cid) in splits:
