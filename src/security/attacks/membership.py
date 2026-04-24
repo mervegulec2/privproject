@@ -50,7 +50,7 @@ class ScientificMIAAuditor(BaseAttack):
             
             # For a scientific audit, we need to know who the REAL members were.
             # We assume the evaluator has access to the split file.
-            split = load_split() # Helper to get indices
+            split = load_split("outputs/data/client_splits.json") # Helper to get indices
             if split is None or str(cid) not in split:
                 continue
                 

@@ -19,7 +19,7 @@ class TrivialClassPresenceAttack(BaseAttack):
             return {"status": "skipped", "reason": "No client data"}
 
         # Load Ground Truth
-        splits = load_split()
+        splits = load_split("outputs/data/client_splits.json")
         if splits is None:
             return {"status": "error", "reason": "No split ground truth found"}
 
