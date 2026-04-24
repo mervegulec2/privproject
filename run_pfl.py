@@ -329,8 +329,12 @@ def main():
     seed = int(os.environ.get("SEED", "42"))
     device = _select_device()
 
+    augmentation = os.environ.get("AUGMENTATION", "off")
+    train_transform = "randaugment" if augmentation == "on" else "default"
+    mixup_alpha = float(os.environ.get("MIXUP_ALPHA", "0.2" if augmentation == "on" else "0.0"))
+
     set_seed(seed)
-    train_ds, test_ds = load_cifar10(Cifar10Config(root="data"))
+    train_ds, test_ds = load_cifar10(Cifar10Config(root="data", train_transform=train_transform))
 
     split_path = f"outputs/splits/cifar10_dirichlet_a{alpha}_s{seed}_c{num_clients}.npy"
     if not os.path.exists(split_path):
@@ -346,6 +350,8 @@ def main():
 
     run_flower_experiment(
         epochs=epochs,
+        train_transform=train_transform,
+        mixup_alpha=mixup_alpha,
         num_clients=num_clients,
         num_rounds=num_rounds,
         alpha=alpha,
