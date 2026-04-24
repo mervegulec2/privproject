@@ -310,6 +310,10 @@ def run_flower_experiment(
 
     # Plot using the CORRECT timestamped path
     plot_accuracy_curves(metrics_path, save_path=plot_path)
+    
+    if metrics_csv_path and os.path.exists(metrics_path):
+        os.makedirs(os.path.dirname(metrics_csv_path), exist_ok=True)
+        shutil.copy2(metrics_path, metrics_csv_path)
 
 
 # ---------------------------------------------------------------------------
