@@ -270,23 +270,23 @@ def run_phase1(
         lp = 0.1  # Fixed lambda_p
         label = f"p1_run{run_id}_cw{'on' if cw else 'off'}"
         out_dir = os.path.join(base_dir, "phase1", label)
-            accs = _run(
-                label=label,
-                epochs=5,
-                lambda_p=lp,
-                use_class_weights=cw,
-                train_transform="default",
-                mixup_alpha=0.0,
-                num_clients=num_clients,
-                num_rounds=num_rounds,
-                alpha=alpha,
-                seed=seed,
-                device=device,
-                train_ds=train_ds,
-                test_ds=test_ds,
-                split=split,
-                out_dir=out_dir,
-            )
+        accs = _run(
+            label=label,
+            epochs=5,
+            lambda_p=lp,
+            use_class_weights=cw,
+            train_transform="default",
+            mixup_alpha=0.0,
+            num_clients=num_clients,
+            num_rounds=num_rounds,
+            alpha=alpha,
+            seed=seed,
+            device=device,
+            train_ds=train_ds,
+            test_ds=test_ds,
+            split=split,
+            out_dir=out_dir,
+        )
         row = {
             "run_id": run_id,
             "lambda_p": lp,
