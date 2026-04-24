@@ -51,10 +51,10 @@ class ScientificMIAAuditor(BaseAttack):
             # For a scientific audit, we need to know who the REAL members were.
             # We assume the evaluator has access to the split file.
             split = load_split(shared_data.get("split_path", "outputs/data/client_splits.npy")) # Helper to get indices
-            if split is None or str(cid) not in split:
+            if split is None or cid not in split:
                 continue
                 
-            member_indices = split[str(cid)]
+            member_indices = split[cid]
             non_member_indices = list(range(len(test_ds))) # Non-members from global test pool
             
             # Sample groups
