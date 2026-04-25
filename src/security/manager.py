@@ -1,7 +1,7 @@
 import os
 import torch
 import torch.nn as nn
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 
 class SecurityManager:
     """
@@ -15,7 +15,7 @@ class SecurityManager:
         self.snapshot_dir = os.path.join(base_dir, "security/snapshots")
         os.makedirs(self.snapshot_dir, exist_ok=True)
 
-    def apply_defenses(self, prototypes: Dict[int, torch.Tensor], counts: Dict[int, int] = None) -> Dict[int, torch.Tensor]:
+    def apply_defenses(self, prototypes: Dict[int, torch.Tensor], counts: Dict[int, int] = None) -> Tuple[Dict[int, torch.Tensor], Optional[Dict[int, int]]]:
         """Applies all registered privacy-preserving defenses and calculates distortion metrics."""
         from src.security.metrics import calculate_statistical_leakage
         import numpy as np
@@ -25,7 +25,12 @@ class SecurityManager:
         
         for defense in self.defenses:
             original_protos = {c: p.clone() if hasattr(p, 'clone') else p.copy() for c, p in perturbed_protos.items()}
-            perturbed_protos = defense.apply(perturbed_protos, counts=counts)
+            
+            result = defense.apply(perturbed_protos, counts=counts)
+            if isinstance(result, tuple) and len(result) == 2:
+                perturbed_protos, counts = result
+            else:
+                perturbed_protos = result
             
             # Collect internal defense metrics if available
             if hasattr(defense, "last_stats"):
@@ -51,7 +56,7 @@ class SecurityManager:
                 "avg_correlation": float(np.mean(corrs)) if corrs else 1.0
             }
             
-        return perturbed_protos
+        return perturbed_protos, counts
 
     def log_and_attack(self, round_idx: int, client_data: List[Dict[str, Any]], model: Optional[nn.Module] = None):
         """
@@ -146,16 +151,11 @@ def security_factory(config: Dict[str, Any]) -> SecurityManager:
             clip_norm=clip_norm, alpha=alpha, beta=beta, sigma_max=sigma_max
         ))
     
-    if "dummy_prototype" in active_defense_names:
+    if "dummy" in active_defense_names or "dummy_prototype" in active_defense_names:
         from src.security.defenses.dummy import DummyPrototypeDefense
         num_classes = int(config.get("num_classes", 10))
-        lambda_val = float(os.environ.get("DUMMY_LAMBDA", 0.7))
         tau = float(os.environ.get("DUMMY_TAU", 0.02))
-        dummy_ratio = int(os.environ.get("DUMMY_RATIO", 1))
-        defenses.append(DummyPrototypeDefense(
-            num_classes=num_classes,
-            lambda_val=lambda_val, tau=tau, dummy_ratio=dummy_ratio
-        ))
+        defenses.append(DummyPrototypeDefense(num_classes=num_classes, tau=tau))
 
     attacks = []
     active_attack_names = config.get("attacks", [])
