@@ -54,8 +54,9 @@ def _select_device() -> str:
 class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object):  # type: ignore[misc]
     """Prototype-only Flower client: shares prototypes, keeps all weights local."""
 
-    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split_indices: np.ndarray, cfg: TrainConfig, security_manager: SecurityManager = None):
+    def __init__(self, cid: int, train_ds, test_sets: Dict[str, Subset], split_indices: np.ndarray, cfg: TrainConfig, security_manager: SecurityManager = None, seed: int = 42):
         self.cid = cid
+        self.seed = seed
         self.train_ds = train_ds
         self.test_sets = test_sets
         self.split_indices = split_indices
@@ -79,6 +80,9 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
         return []
 
     def fit(self, parameters, config):
+        current_round = int(config.get("round", 0))
+        set_seed(self.seed + self.cid + current_round * 100)
+
         # Unpack global prototypes from server config (using pickle).
         global_protos: Dict[int, np.ndarray] = {}
         if "protos_bytes" in config:
@@ -248,6 +252,7 @@ def run_flower_experiment(
 
     # 3. Initialize Strategy with timestamped CSV path
     metrics_path = os.path.join(run_dir, "metrics", "simulation_results.csv")
+    plot_path = os.path.join(run_dir, "metrics", "accuracy_curve.png")
     os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
     strategy = PrototypeStrategy(
         fraction_fit=1.0,
@@ -271,6 +276,10 @@ def run_flower_experiment(
 
     def client_fn(cid: str) -> fl.client.Client:
         cid_int = int(cid)
+        # seed varies by client id only at init time
+        # round-level seed is set inside fit() when round is known
+        set_seed(seed + cid_int)
+
         seen_classes = get_seen_classes(train_ds, split[cid_int])
 
         lp_indices = create_local_proportional_indices(
@@ -284,13 +293,8 @@ def run_flower_experiment(
             "local": Subset(test_ds, la_indices),
         }
         return FlowerPrototypeClient(
-            cid_int, train_ds, test_sets, split[cid_int], cfg_train, security_manager
+            cid_int, train_ds, test_sets, split[cid_int], cfg_train, security_manager, seed
         ).to_client()
-
-    # 3. Initialize Strategy with timestamped CSV path
-    metrics_path = os.path.join(run_dir, "metrics", "simulation_results.csv")
-    plot_path = os.path.join(run_dir, "metrics", "accuracy_curve.png")
-    os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
     
     strategy = PrototypeStrategy(
         num_classes=10,

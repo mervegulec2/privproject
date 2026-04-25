@@ -3,10 +3,18 @@ import pickle
 import os
 import torch
 import numpy as np
+import random
 from typing import Dict, List, Any
 from src.security.manager import security_factory
 from src.data_utils import load_cifar10, Cifar10Config, load_split
 from PIL import Image
+
+EVAL_SEED = 42
+random.seed(EVAL_SEED)
+np.random.seed(EVAL_SEED)
+torch.manual_seed(EVAL_SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(EVAL_SEED)
 
 def main():
     parser = argparse.ArgumentParser(description="PFL Security Evaluation Tool")
