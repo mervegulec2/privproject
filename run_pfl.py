@@ -299,14 +299,6 @@ def run_flower_experiment(
         return FlowerPrototypeClient(
             cid_int, train_ds, test_sets, split[cid_int], cfg_train, security_manager, seed
         ).to_client()
-    
-    strategy = PrototypeStrategy(
-        num_classes=10,
-        min_fit_clients=num_clients,
-        min_available_clients=num_clients,
-        security_manager=security_manager,
-        metrics_csv_path=metrics_path,
-    )
 
     client_resources = {"num_cpus": 1, "num_gpus": 0.0}
     if cfg_train.device and "cuda" in str(cfg_train.device):
