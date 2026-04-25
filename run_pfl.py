@@ -81,20 +81,17 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
 
     def fit(self, parameters, config):
         current_round = int(config.get("round", 0))
-        client_seed = self.seed + self.cid + current_round * 100
+        set_seed(self.seed + self.cid + current_round * 100)
 
         # Unpack global prototypes from server config (using pickle).
         global_protos: Dict[int, np.ndarray] = {}
         if "protos_bytes" in config:
             global_protos = pickle.loads(config["protos_bytes"])
 
-        g = torch.Generator()
-        g.manual_seed(self.seed + self.cid + current_round * 100)
         train_loader = DataLoader(
             Subset(self.train_ds, self.split_indices),
             batch_size=self.cfg.batch_size,
             shuffle=True,
-            generator=g,
         )
 
         use_cw = os.environ.get("USE_CLASS_WEIGHTS", "1") != "0"
@@ -105,8 +102,7 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
 
         progress = os.environ.get("PROGRESS", "0") != "0"
         lambda_p = float(os.environ.get("LD", os.environ.get("LAMBDA_P", "0.1")))
-        set_seed(client_seed)
-        train_local_proto(self.model, train_loader, global_protos, self.cfg, lambda_p=lambda_p, progress=progress, cid=self.cid, class_weights=class_weights, seed=client_seed)
+        train_local_proto(self.model, train_loader, global_protos, self.cfg, lambda_p=lambda_p, progress=progress, cid=self.cid, class_weights=class_weights)
         
         # Save model after training
         torch.save(self.model.state_dict(), self.model_path)
@@ -139,7 +135,7 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
 
         return [], len(self.split_indices), metrics
 
-""""
+
 def _flower_server_proc(server_address: str, num_rounds: int, num_clients: int) -> None:
     if fl is None:
         raise RuntimeError("flwr is not installed but USE_FLOWER=1 was set.")
@@ -176,7 +172,7 @@ def _flower_client_proc(server_address: str, cid: int, split_path: str, cfg_dict
 
     client = FlowerPrototypeClient(cid, train_ds, test_sets, split[cid], cfg)
     fl.client.start_numpy_client(server_address=server_address, client=client)
-"""
+
 
 def _reset_ray_if_needed() -> None:
     try:
@@ -280,6 +276,10 @@ def run_flower_experiment(
 
     def client_fn(cid: str) -> fl.client.Client:
         cid_int = int(cid)
+        # seed varies by client id only at init time
+        # round-level seed is set inside fit() when round is known
+        set_seed(seed + cid_int)
+
         seen_classes = get_seen_classes(train_ds, split[cid_int])
 
         lp_indices = create_local_proportional_indices(

@@ -23,14 +23,12 @@ class TrainConfig:
     swa_last_epochs: int = 2
 
 
-def _mixup_data(x: torch.Tensor, y: torch.Tensor, alpha: float, rng, device):
+def _mixup_data(x: torch.Tensor, y: torch.Tensor, alpha: float):
     if alpha <= 0.0:
         return None
-    lam = float(rng.beta(alpha, alpha))
+    lam = float(np.random.beta(alpha, alpha))
     batch_size = x.size(0)
-    g = torch.Generator(device=device)
-    g.manual_seed(int(rng.integers(0, 2**31)))
-    index = torch.randperm(x.size(0), device=device, generator=g)
+    index = torch.randperm(batch_size, device=x.device)
     mixed_x = lam * x + (1.0 - lam) * x[index]
     y_a, y_b = y, y[index]
     return mixed_x, y_a, y_b, lam
@@ -45,12 +43,11 @@ def train_local_proto(
     progress: bool = False,
     cid: int = -1,
     class_weights: torch.Tensor = None,
-    seed: int = None,
 ):
     """Collaborative training with Prototype Alignment Loss."""
     model.to(cfg.device)
     model.train()
-    rng = np.random.default_rng(seed)
+
     # Personalization knobs: allow training only parts of the model (e.g., head-only).
     if hasattr(model, "backbone"):
         for p in model.backbone.parameters():
@@ -97,7 +94,7 @@ def train_local_proto(
             x, y = x.to(cfg.device), y.to(cfg.device)
             opt.zero_grad()
 
-            mix = _mixup_data(x, y, cfg.mixup_alpha, rng, cfg.device) if cfg.mixup_alpha > 0 else None
+            mix = _mixup_data(x, y, cfg.mixup_alpha) if cfg.mixup_alpha > 0 else None
             use_proto = proto_table is not None and mix is None
 
             with torch.cuda.amp.autocast(enabled=use_amp):
