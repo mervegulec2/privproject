@@ -26,21 +26,29 @@ class TrivialClassPresenceAttack(BaseAttack):
         audit_results = {}
         
         for client_info in clients:
-            cid = str(client_info["cid"])
-            observed_protos = client_info["protos"] # The attacker sees these keys
+            cid = client_info["cid"]
+            observed_protos = client_info["protos"] 
             
             # 1. Attacker's Guess (Key-based)
             sent_classes = set([int(k) for k in observed_protos.keys()])
             y_pred = [1 if c in sent_classes else 0 for c in range(self.num_classes)]
             
             # 2. Ground Truth (From data splits)
-            if cid not in splits:
+            # Normalize cid to int — Flower metrics stores cid as string,
+            # but load_split returns int keys
+            try:
+                cid_int = int(cid)
+            except (ValueError, TypeError):
                 continue
+            
+            if cid_int not in splits:
+                continue
+            
+            member_indices = splits[cid_int]
                 
             from src.data_utils import load_cifar10, Cifar10Config
             train_ds, _ = load_cifar10(Cifar10Config(root="data"))
             
-            member_indices = splits[cid]
             true_classes = set([train_ds.targets[i] for i in member_indices])
             y_true = [1 if c in true_classes else 0 for c in range(self.num_classes)]
             

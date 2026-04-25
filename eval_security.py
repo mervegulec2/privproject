@@ -30,12 +30,31 @@ def main():
         print(f"Error loading snapshot: {e}")
         return
 
-    # Filter snapshot if limits are set
+    # 2. Extract and format client data from snapshot
+    clients_list = []
+    if "prototypes" in snapshot:
+        # Standard PFL snapshot format: {cid: {class_id: proto}}
+        for cid, protos in snapshot["prototypes"].items():
+            counts = snapshot.get("counts", {}).get(cid, {})
+            clients_list.append({
+                "cid": cid,
+                "protos": protos,
+                "counts": counts
+            })
+    elif "clients" in snapshot:
+        # Alternative format if already list-based
+        clients_list = snapshot["clients"]
+    
+    if not clients_list:
+        print("Error: No client data found in snapshot.")
+        return
+
+    # Filter if limits are set
     if args.limit_clients > 0:
-        snapshot["clients"] = snapshot["clients"][:args.limit_clients]
+        clients_list = clients_list[:args.limit_clients]
     
     if args.limit_classes > 0:
-        for client in snapshot["clients"]:
+        for client in clients_list:
             keys = list(client["protos"].keys())[:args.limit_classes]
             client["protos"] = {k: client["protos"][k] for k in keys}
             client["counts"] = {k: client["counts"][k] for k in keys}
@@ -50,7 +69,7 @@ def main():
     # 4. Execute Attack
     print(f"Executing {args.attack} attack...")
     results = attack_module.execute(snapshot.get("model_state"), {
-        "clients": snapshot["clients"], 
+        "clients": clients_list, 
         "log_model_state": True,
         "split_path": args.split_path
     })
