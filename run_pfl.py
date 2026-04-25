@@ -81,17 +81,21 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
 
     def fit(self, parameters, config):
         current_round = int(config.get("round", 0))
-        set_seed(self.seed + self.cid + current_round * 100)
+        client_seed = self.seed + self.cid + current_round * 100
+        set_seed(client_seed)
 
         # Unpack global prototypes from server config (using pickle).
         global_protos: Dict[int, np.ndarray] = {}
         if "protos_bytes" in config:
             global_protos = pickle.loads(config["protos_bytes"])
 
+        g = torch.Generator()
+        g.manual_seed(self.seed + self.cid + current_round * 100)
         train_loader = DataLoader(
             Subset(self.train_ds, self.split_indices),
             batch_size=self.cfg.batch_size,
             shuffle=True,
+            generator=g,
         )
 
         use_cw = os.environ.get("USE_CLASS_WEIGHTS", "1") != "0"
@@ -135,7 +139,7 @@ class FlowerPrototypeClient(fl.client.NumPyClient if fl is not None else object)
 
         return [], len(self.split_indices), metrics
 
-
+""""
 def _flower_server_proc(server_address: str, num_rounds: int, num_clients: int) -> None:
     if fl is None:
         raise RuntimeError("flwr is not installed but USE_FLOWER=1 was set.")
@@ -172,7 +176,7 @@ def _flower_client_proc(server_address: str, cid: int, split_path: str, cfg_dict
 
     client = FlowerPrototypeClient(cid, train_ds, test_sets, split[cid], cfg)
     fl.client.start_numpy_client(server_address=server_address, client=client)
-
+"""
 
 def _reset_ray_if_needed() -> None:
     try:
