@@ -43,6 +43,7 @@ def train_local_proto(
     progress: bool = False,
     cid: int = -1,
     class_weights: torch.Tensor = None,
+    individual_proto_loss: bool = False,
 ):
     """Collaborative training with Prototype Alignment Loss."""
     model.to(cfg.device)
@@ -119,8 +120,13 @@ def train_local_proto(
                         for c in unique_classes:
                             c_idx = int(c.item())
                             if c_idx < proto_table.size(0) and proto_avail[c_idx]:
-                                batch_proto_c = emb[y == c].mean(dim=0)
-                                dist = torch.sum((batch_proto_c - proto_table[c_idx]) ** 2)
+                                if individual_proto_loss:
+                                    # Her datanın embeddingini global prototiple kıyaslayalım
+                                    class_embs = emb[y == c]
+                                    dist = torch.sum((class_embs - proto_table[c_idx]) ** 2) / class_embs.size(0)
+                                else:
+                                    batch_proto_c = emb[y == c].mean(dim=0)
+                                    dist = torch.sum((batch_proto_c - proto_table[c_idx]) ** 2)
                                 valid_dists.append(dist)
 
                         if valid_dists:
